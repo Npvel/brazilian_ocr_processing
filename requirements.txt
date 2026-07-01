@@ -1,0 +1,12 @@
+# br_ocr_json_processing — Python dependencies
+# Install:  python3.13 -m pip install -r requirements.txt
+#
+# Corporate proxy (Allianz laptops):
+#   python3.13 -m pip install -r requirements.txt \
+#     --proxy http://127.0.0.1:9000 \
+#     --trusted-host pypi.org --trusted-host files.pythonhosted.org
+
+streamlit==1.58.0     # web front-end (app.py); pulls in pandas as a dependency
+openpyxl==3.1.5       # Excel export (export_excel.py) — read/write .xlsx
+PyYAML==6.0.3         # config parsing (anchors.yaml) for Stages 2/3
+rapidfuzz==3.14.5     # fuzzy name matching; code falls back to stdlib difflib if absent

@@ -1,0 +1,759 @@
+schema_version: '1.0'
+normalization_rules:
+  - lowercase all aliases
+  - remove diacritics (e.g., 'líquida' -> 'liquida')
+  - replace '&' with ' e ', '/' with space, '+' with space
+  - remove all punctuation except alphanumerics and spaces
+  - collapse multiple spaces and trim
+sections:
+  meta_labels:
+    account_type:
+      primary: ACCOUNT_TYPE
+      aliases: []
+      datatype: string
+      required: false
+      description: Type of report or entity (e.g., consolidated, standalone).
+    closing_date:
+      primary: CLOSING_DATE
+      aliases: []
+      datatype: date
+      required: false
+      description: Period end date of the financial statements.
+    duration:
+      primary: DURATION
+      aliases: []
+      datatype: string
+      required: false
+      description: Reporting period length (e.g., 3M, 6M, FY).
+    currency:
+      primary: CURRENCY
+      aliases: []
+      datatype: string
+      required: false
+      description: Reporting currency (e.g., BRL, USD).
+    unit:
+      primary: UNIT
+      aliases: []
+      datatype: string
+      required: false
+      description: Scale of figures (e.g., units, thousands, millions).
+  income_statement:
+    turnover:
+      primary: TURNOVER
+      aliases:
+        - faturam liquido
+        - receita bruta com vendas deducoes sobre vendas
+        - receita bruta de vendas e servicos deducoes da receita bruta
+        - receita bruta deducoes da receita bruta
+        - receita de venda de bens e ou servicos
+        - receita de vendas
+        - receita liquida
+        - receita liquida de vendas
+        - receita liquida total
+        - receita mercado interno receita mercado externo
+        - receita operacional liquida
+        - receitas comerciais deducoes de receitas
+        - receitas operacionais deducoes da receita bruta
+        - receita liquida de vendas e servicos
+        - receitas liquidas das vendas de mercadorias
+        - receita
+        - receita de vendas e de servicos prestados
+        - receita de venda de mercadorias e servicos
+      datatype: currency
+      required: false
+      description: Net revenue / net sales.
+    cogs:
+      primary: COGS
+      aliases:
+        - cmv
+        - custo da mercadoria vendida
+        - custo das vendas e dos servicos prestados
+        - custo das mercadorias vendidas
+        - custo de mercadorias e servicos vendidos
+        - custo das revendas
+        - custo das vendas e revendas
+        - custo das vendas servicos
+        - custo dos bens e ou servicos vendidos
+        - custo dos produtos e servicos vendidos
+        - custo dos produtos vendidos variacao do valor justo dos ativos biologicos
+        - custo dos produtos vendidos e servicos prestados
+        - custo dos servicos prestados
+        - custo dos produtos vendidos
+        - custos
+        - custos de revenda de mercadorias
+        - Custos dos produtos vendidos e dos servicos prestados
+        - custos da venda de mercadorias
+        - custos das merc vendidas
+        - custos operacionais
+        - custos s vendas
+        - mudanca no valor justo de ativos biologicos
+      datatype: currency
+      required: false
+      description: Cost of goods and/or services sold.
+    gross_profit:
+      primary: GROSS_PROFIT
+      aliases:
+        - lucro bruto
+        - resultado bruto
+        - resultado operacional bruto
+      datatype: currency
+      required: false
+      description: Revenue minus cost of goods sold.
+
+    operating_expenses:
+      primary: OPERATING_EXPENSES
+      aliases:
+        # --- Group headers for SG&A / Operacionais ---
+        - despesas operacionais
+        - total despesas operacionais
+        - despesas operacionais antes do resultado financeiro
+        - despesas operacionais exceto despesas financeiras
+        - despesas operacionais despesas financeiras
+        - despesas operacionais despesas financeiras despesas bancarias
+
+        # --- SG&A canonical forms ---
+        - despesas gerais e administrativas
+        - despesas administrativas e gerais
+        - despesas gerais administrativas
+        - vendas gerais e administrativas
+        - despesas comerciais gerais e administrativas
+        - despesas comerciais e administrativas
+        - despesas comerciais administrativas e gerais
+
+        # --- Vendas (comerciais) + Administrativas (+ Gerais) combos ---
+        - despesas com vendas e administrativas
+        - despesas com vendas e despesas administrativas
+        - despesas com vendas despesas administrativas
+        - despesas com vendas despesas administrativas e gerais
+        - despesas de vendas e administrativas
+        - despesas de vendas administrativas e gerais
+        - administrativas e gerais com vendas
+        - gerais e administrativas
+        - gerais e administrativas
+        - vendas gerais e administrativas e comerciais
+        - despesas com vendas gerais e administrativas
+        - despesas de vendas despesas administrativas e gerais
+        - despesas administrativas e despesas com vendas
+        - despesas de vendas e comerciais
+
+        # --- Short forms / abbreviations seen in practice (punctuation removed by normalizer) ---
+        - desps administrativas e gerais
+        - desp administrativas e gerais
+        - desps gerais e administrativas
+        - desp gerais e administrativas
+        - desps operacionais
+        - desp operacionais
+
+        # --- Variants with "c/" (becomes "c" after normalization) ---
+        - despesas c vendas
+        - despesas com vendas despesas c pessoal  # multi bucket captions sometimes list pessoal inline
+        - vendas
+
+        # --- Broader operational expense captions (safe) ---
+        - despesas comerciais
+        - despesas administrativas
+        - total despesas comerciais gerais e administrativas
+        - total de despesas com vendas administrativas e gerais
+        - despesas gerais ou administrativas
+
+        # --- Captions that explicitly exclude finance costs (common layout notes) ---
+        - despesas operacionais menos despesas financeiras
+        - despesas operacionais ex despesas financeiras
+
+        # --- Captions that bundle operating expenses with hints (kept for exact-equality safety) ---
+        - despesas operacionais despesas financeiras despesas bancarias
+        - despesas operacionais despesas financeiras despesas bancarias e outras
+
+        - desp adminis                 # catches "DESP ADMINIS"
+        - despesas de vendas           # standalone selling expenses caption
+        - desp vendas                  # common abbreviation
+        - desps vendas                 # plural abbreviation
+        - desps de vendas
+        - desp c vendas                # "desp c/ vendas" after normalization
+        - desp com vendas
+        - despesas com vendas
+
+      datatype: currency
+      required: false
+      description: Selling, general and administrative expenses, and other operating opex.
+
+    other_oper_inc:
+      primary: OTHER_OPER_INC
+      aliases:
+        - out rec oper
+      datatype: currency
+      required: false
+      description: Other operating income.
+    operating_profit:
+      primary: OPERATING_PROFIT
+      aliases:
+        - result atividade
+        - lucro prejuizo operacional antes do resultado financeiro
+        - lucro antes do resultado financeiro
+        - resultado antes das receitas e despesas financeiras
+        - lucro prejuizo antes do resultado financeiro
+        - resultado antes das despesas e receitas financeiras liquidas e tributos
+        - lucro antes do resultado financeiro e dos tributos
+        - resultado antes do resultado financeiro e dos tributos
+        - lucro operacional antes do resultado financeiro
+        - lucro prejuizo antes do resultado financeiro e equivalencia patrimonial
+      datatype: currency
+      required: false
+      description: Operating profit (EBIT).
+    financial_expenses:
+      primary: FINANCIAL_EXPENSES
+      aliases:
+        - despesas financeiras
+      datatype: currency
+      required: false
+      description: Finance costs (interest and related).
+    financial_result:
+      primary: FINANCIAL_RESULT
+      aliases:
+        - resultado financeiro
+        - result financeiro
+        - resultado financeiro liquido
+        
+      datatype: currency
+      required: false
+      description: Net financial result (financial income minus expenses).
+    exceptional_result:
+      primary: EXCEPTIONAL_RESULT
+      aliases:
+        - equivalencia patrimonial
+        - resultado de equivalencia patrimonial
+        - resultado de equivalencia patrimonial sobre investimentos
+      datatype: currency
+      required: false
+      description: Equity method results / exceptional items.
+    ebt:
+      primary: EBT
+      aliases:
+        - lucro antes do imposto de renda
+        - lucro antes dos impostos
+        - lucro antes dos tributos sobre o lucro
+        - resultado antes da provisao para imposto de renda e da contribuicao social
+        - resultado antes do ir e csl
+        - resultado antes do ir e csll
+        - resultado antes ir
+        - resultado antes dos impostos
+        - resultado antes dos tributos sobre o lucro
+        - resultado liquido antes da provisao irpj csl
+        - lucro prejuizo antes dos impostos
+        - lucro do exercicio antes do irpje cssl
+        - lucro antes ir da contrib social
+        - prejuizo antes do imposto de renda
+        - lucro prejuizo antes do imposto de renda e da contribuicao social
+        - lucro antes do ir e da csll
+        - resultado antes da cs e ir
+        - resultado antes do ir csll
+        - lucro liquido antes do ir e csll
+        - resultado antes da contribuicao social e do imposto de renda
+        - resultado antes do imposto de renda
+        - prejuizo antes do imposto de renda e da contribuicao social
+      datatype: currency
+      required: false
+      description: Earnings before income taxes.
+    taxes:
+      primary: TAXES
+      aliases:
+        - imposto de renda e contribuicao social
+        - imposto de renda e contribuicao social correntes imposto de renda e contribuicao social diferidos
+        - ir e contribuicao social corrente ir e contribuicao social diferidos
+        - provisao p imposto renda e contrib social
+        - provisao para contribuicao social provisao para imposto de renda
+        - provisao dos impostos
+        - provisoes para ir e csl
+        - imposto de renda e contribuicao social sobre o lucro
+        - prov ir c soc s lucros
+        - imposto de renda e csll
+        - contribuicao social e imposto de renda
+        - contribuicao social
+        - imposto de renda
+        - imposto de renda e contribuicao social - correntes e diferidos
+        - imposto de renda e contribuicao social correntes
+        - imposto de renda e contribuicao social diferidos
+      datatype: currency
+      required: false
+      description: Income tax expense (current and deferred).
+    net_income:
+      primary: NET_INCOME
+      aliases:
+        - lucro liquido do exercicio
+        - lucro liquido do exercicio.
+        - lucro liquido prejuizo
+        - lucro prejuizo do periodo
+        - lucro prejuizo liquido do periodo
+        - lucro do exercicio
+        - resultado do exercicio
+        - resultado do periodo
+        - result exercicio
+        - result excercicio
+        - prejuizo do exercicio
+        - lucro prejuizo do exercicio
+        - resultado liquido do exercicio
+        - resultado liquido
+        - resultado liquido do periodo
+        - lucro prejuizo consolidado do periodo
+      datatype: currency
+      required: false
+      description: Profit (loss) for the period.
+    dividends:
+      primary: DIVIDENDS
+      aliases:
+        - dividendos
+        - dividendos distribuidos
+        - dividendos e juros sobre capital proprio pagos
+        - dividendos pagos
+        - dividendos pagos a acionistas
+        - pagamento de dividendos
+        - pagamento de dividendos e jcp
+        - pagamento de dividendos pagamento de dividendos nao controladores
+        - dividendos pagos aos acionistas
+      datatype: currency
+      required: false
+      description: Dividends paid/distributed.
+  balance_assets:
+    cash_and_securities:
+      primary: CASH_AND_SECURITIES
+      aliases:
+        - caixa
+        - caixa e bancos
+        - caixa bancos
+        - bancos
+        - bancos conta movimento
+        - bancos c movimento
+        - disponibilidades
+        - disponivel
+        - numerarios
+        - numerarios banco c movimento aplicacoes financeiras
+        - caixa e depositos bancarios
+        - caixa e equivalentes
+        - equivalentes de caixa
+        - disponibilidades e equivalentes de caixa
+        - caixa e bancos aplicacoes de liquidez imediata
+        - aplicacoes de liquidez imediata
+        - caixa e aplicacoes de liquidez imediata
+        - caixa e equivalentes de caixa
+        - caixa e equivalentes a caixa
+        - caixa e equivalente de caixa
+        - caixa e equivalentes de caixa aplicacoes financeiras
+        - caixa e equivalentes de caixa titulos e valores mobiliarios
+        - caixa e equiv de caixa titulos a valores mobiliarios e aplicacoes financeiras
+        - disponivel aplicacoes financeiras
+        - disponibilidades e aplicacoes financeiras
+        - disponibilidades e investimentos de curto prazo
+      datatype: currency
+      required: false
+      description: Cash and cash equivalents, including very liquid securities.
+
+    short_term_investments:
+      primary: SHORT_TERM_INVESTMENTS
+      aliases:
+        - aplicacoes financeiras
+        - aplicacao financeira
+        - aplicacoes de curto prazo
+        - aplicacoes financeiras de curto prazo
+        - aplicacoes financeiras curto prazo
+        - investimentos de curto prazo
+        - investimentos temporarios
+        - investimentos financeiros
+        - titulos e valores mobiliarios
+        - operacoes compromissadas
+        - mercado aberto
+        - aplicacoes no mercado aberto
+        - fundos de investimento
+        - cdb rdb
+      datatype: currency
+      required: false
+      description: Short-term financial investments.
+
+    receivables:
+      primary: RECEIVABLES
+      aliases:
+        - clientes
+        - contas a receber
+        - contas a rec de clientes
+        - contas a receber de clientes
+        - contas a receber liquidas
+        - clientes a receber
+        - creditos a receber
+        - creditos de clientes
+        - creditos de vendas e servicos
+        - titulos a receber
+        - duplicatas
+        - duplicatas a receber
+        - duplicatas a receber liquidas
+        - titulos a receber contas a receber liquidas
+        - cartoes de credito a receber
+        - cartao de credito a receber
+        - provisao devedores duvidosos
+        - perdas estimadas com credito de liquidacao duvidosa
+        - pecld
+        - contas a receber de partes relacionadas
+        - recebiveis de vendas
+        - contas a receber de clientes e ativos de contrato
+      datatype: currency
+      required: false
+      description: Trade and other receivables related to sales.
+
+    inventories:
+      primary: INVENTORIES
+      aliases:
+        - estoque
+        - estoques
+        - estoque de mercadorias
+        - mercadorias para revenda
+        - produtos acabados
+        - produtos em processo
+        - materias primas
+        - almoxarifado
+        - estoque em transito e adiantamentos
+      datatype: currency
+      required: false
+      description: Inventories / stocks.
+
+    current_assets:
+      primary: CURRENT_ASSETS
+      aliases:
+        - ativo circulante
+        - circulante
+        - total do ativo circulante
+        - total do circulante
+        - ativo corrente
+        - total do ativo corrente
+        - realizavel a curto prazo
+        - total do realizavel a curto prazo
+      datatype: currency
+      required: false
+      description: Total current assets.
+
+    fixed_assets:
+      primary: FIXED_ASSETS
+      aliases:
+        - imobilizado
+        - ativo imobilizado
+        - imobilizado liquido
+        - imobilizado em curso
+        - propriedade planta e equipamento
+      datatype: currency
+      required: false
+      description: Property, plant and equipment (net).
+
+    intangible_assets:
+      primary: INTANGIBLE_ASSETS
+      aliases:
+        - intangivel
+        - ativo intangivel
+        - intangivel liquido
+        - ativos intangiveis
+        - ativos intangiveis liquidos
+      datatype: currency
+      required: false
+      description: Intangible assets (net).
+
+    non_current_assets:
+      primary: NON_CURRENT_ASSETS
+      aliases:
+        - ativo nao circulante
+        - nao circulante
+        - total do nao circulante
+        - total do ativo nao circulante
+        - ativo nao corrente
+        - total do ativo nao corrente
+      datatype: currency
+      required: false
+      description: Total non-current assets.
+
+    total_assets:
+      primary: TOTAL_ASSETS
+      aliases:
+        - ativo
+        - ativos
+        - ativo total
+        - total do ativo
+        - total dos ativos
+        - total geral do ativo
+      datatype: currency
+      required: true
+      description: Total assets.
+
+  balance_liabilities_equity:
+    short_term_debt:
+      primary: SHORT_TERM_DEBT
+      aliases:
+        - financiamentos
+        - emprestimos a curto prazo
+        - emprestimos e financiamentos a curto prazo
+        - emprestimos e financiamentos curto prazo
+        - emprestimos e financiamentos circulante
+        - financiamentos de curto prazo
+        - financiamentos curto prazo
+        - financiamentos bancarios
+        - obrigacoes financeiras de curto prazo
+        - obrigacoes financeiras circulante
+        - debentures a pagar curto prazo
+        - debentures circulante
+        - notas promissorias a pagar
+        - cedulas de credito bancario a pagar
+        - ccb a pagar
+        - arrendamentos a pagar curto prazo
+        - obrigacoes por arrendamento curto prazo
+        - passivo de arrendamento circulante
+        - arrendamento mercantil curto prazo
+        - emprest e financiamentos
+        - emprest e financiamentos titulos emitidos
+        - emprestimos e financiamentos
+        - emprestimos a curto prazo
+        - emprestimos financiamentos e debentures
+        - emprestimos financiamentos e debentures circulante
+        - emprestimos financiamentos e debentures fornecedor risco sacado
+        - financ e emprestimos obrigacoes risco sacado
+        - obrigacoes financeiras e emprestimos
+        - linhas de credito de curto prazo
+        - risco sacado
+      datatype: currency
+      required: false
+      description: Borrowings and financial liabilities due within 12 months.
+
+    payables:
+      primary: PAYABLES
+      aliases:
+        - fornecedores
+        - contas a pagar a fornecedores
+        - fornecedores e outras contas a pagar
+        - fornecedores e servicos
+        - fornecedores de servicos
+        - fornecedores nacionais
+        - fornecedores internacionais
+        - fornecedores risco sacado
+        - fornecedores fornecedores risco sacado convenio
+        - risco sacado
+        - duplicatas a pagar
+        - contas a pagar a fornecedores e fretes
+        - fornecedores partes relacionadas
+      datatype: currency
+      required: false
+      description: Trade payables / suppliers.
+
+    current_liabilities:
+      primary: CURRENT_LIABILITIES
+      aliases:
+        - passivo circulante
+        - circulante
+        - total do passivo circulante
+        - total do circulante
+        - passivo corrente
+        - total do passivo corrente
+        - exigivel a curto prazo
+        - total do exigivel a curto prazo
+        - total dos passivos circulantes
+        - passivo circ
+      datatype: currency
+      required: false
+      description: Total current liabilities.
+
+    long_term_debt:
+      primary: LONG_TERM_DEBT
+      aliases:
+        - financiamentos
+        - emprestimos a longo prazo
+        - emprestimos e financiamentos a longo prazo
+        - emprestimos e financiamentos longo prazo
+        - emprestimos e financiamentos nao circulante
+        - financiamentos de longo prazo
+        - financiamentos nao circulante
+        - financiamentos bancarios nao circulante
+        - debentures a pagar longo prazo
+        - debentures nao circulante
+        - notas promissorias a pagar longo prazo
+        - cedulas de credito bancario a pagar longo prazo
+        - ccb a pagar longo prazo
+        - arrendamentos a pagar nao circulante
+        - obrigacoes por arrendamento nao circulante
+        - passivo de arrendamento nao circulante
+        - arrendamento mercantil nao circulante
+        - emprestimos financiamentos e debentures nao circulante
+        - linhas de credito de longo prazo
+      datatype: currency
+      required: false
+      description: Borrowings and financial liabilities due after 12 months.
+
+    non_current_liabilities:
+      primary: NON_CURRENT_LIABILITIES
+      aliases:
+        - passivo nao circulante
+        - nao circulante
+        - total do nao circulante
+        - total do passivo nao circulante
+        - passivo nao corrente
+        - total do passivo nao corrente
+        - exigivel a longo prazo
+        - total do exigivel a longo prazo
+        - Total dos passivos nao circulantes
+      datatype: currency
+      required: false
+      description: Total non-current liabilities.
+
+    total_equity:
+      primary: TOTAL_EQUITY
+      aliases:
+        - patrimonio liquido
+        - total do patrimonio liquido
+        - patrimonio liquido total
+        - patrimonio liquido consolidado
+        - total do pl
+        - patrimonio liquido atribuivel aos acionistas da controladora
+        - patrimonio liquido atribuivel aos proprietarios da controladora
+        - patrimonio liquido dos acionistas controladores
+      datatype: currency
+      required: false
+      description: Shareholders' equity / net worth.
+
+  cash_flow:
+    ffo:
+      primary: FFO
+      aliases:
+        # FFO (before working-capital changes)
+        - caixa gerado nas operacoes
+        - geracao de caixa nas operacoes
+        - geracao de caixa operacional antes da variacao do capital de giro
+        - caixa das operacoes antes da variacao do capital de giro
+        - fluxo de caixa das operacoes antes da variacao do capital de giro
+        - recursos gerados pelas operacoes
+        - recursos liquidos gerados pelas operacoes
+        - funds from operations
+        - ffo
+        - lucro liquido do periodo ajustado
+        - resultado ajustado antes das variacoes
+      datatype: currency
+      required: false
+      description: Funds from operations (pre working-capital and non-cash adjustments depending on source).
+
+    wcn:
+      primary: WCN
+      aliases:
+        # Working capital movement (variacao em ativos/passivos operacionais)
+        - variacao no capital de giro
+        - variacao do capital de giro
+        - variacao do capital circulante liquido
+        - variacao em capital de giro
+        - aumento reducao do capital de giro
+        - reducao aumento dos ativos operacionais aumento reducao dos passivos operacionais
+        - variacao em ativos variacao em passivos
+        - variacoes nos ativos e passivos
+        - variacao nos ativos e passivos operacionais
+        - variacoes em ativos e passivos operacionais
+        - alteracao no capital de giro
+        - mudanca no capital de giro
+      datatype: currency
+      required: false
+      description: Change in working capital (operational current assets and liabilities).
+
+    cfo:
+      primary: CFO
+      aliases:
+        # Net cash from operating activities (common BR captions)
+        - caixa liquido gerado pelas atividades operacionais
+        - caixa liquido gerado por atividades operacionais
+        - caixa liquido proveniente das atividades operacionais
+        - caixa liquido das atividades operacionais
+        - caixa liquido aplicado nas atividades operacionais
+        - caixa liquido consumido nas atividades operacionais
+        - caixa liquido utilizado nas atividades operacionais
+        - fluxo de caixa das atividades operacionais
+        - fluxo de caixa liquido das atividades operacionais
+        - recursos liquidos gerados pelas atividades operacionais
+        - recursos liquidos utilizados nas atividades operacionais
+        # Variants with common trailers (keep them so equality still hits)
+        - caixa decorrente das atividades operacionais imposto de renda e contribuicao social pagos
+        - caixa gerado pelas utilizados nas atividades operacionais imposto de renda e contribuicao social pagos
+        - caixa liquido atividades operacionais
+        - caixa liquido atividades operacionais aplicacoes financeiras
+        - caixa liquido gerado pelas atividades operacionais juros pagos
+        - caixa liquido atividades operacionais pagamento de encargos de emprestimos e financiamentos risco sacado pagamento de juros arrendamento mercantil ifrs 16
+        - fluxo de caixa liquido proveniente das utilizado nas atividades operacionais
+        - caixa liquido gerado nas atividades operacionais
+      datatype: currency
+      required: false
+      description: Net cash from operating activities.
+
+    provision:
+      primary: PROVISION
+      aliases:
+        - perdas estimadas de credito de liquidacao duvidosa pecld
+        - perdas estimadas para creditos liquidacao duvidosa
+        - perda estimada com creditos de liquidacao duvidosa
+      datatype: currency
+      required: false
+      description: Provision for doubtful accounts (PECLD) / credit loss allowance.
+    
+    depreciation:
+      primary: DEPRECIATION
+      aliases:
+        - depreciacao
+        - depreciacao amortizacao
+        - despesas depreciacao
+        - depreciacao e amortizacao
+        - depreciacoes e amortizacoes
+      datatype: currency
+      required: false
+      description: Depreciation and amortization expense.
+
+    capex:
+      primary: CAPEX
+      aliases:
+        # Cash outflows for PP&E and intangibles
+        - capex
+        - aquisicao de ativo imobilizado
+        - aquisicao de imobilizado
+        - aquisicao de bens do ativo imobilizado
+        - aquisicao de bens do ativo imobilizado e intangivel
+        - aquisicao de imobilizado e intangivel
+        - adicao de bens do ativo imobilizado e intangivel
+        - adicoes ao imobilizado
+        - adicoes ao ativo imobilizado
+        - investimentos em imobilizado
+        - investimentos em ativo imobilizado
+        - investimentos em imobilizado e intangivel
+        - aplicacao de recursos em imobilizado
+        - aplicacao de recursos no intangivel
+        - compras de imobilizado
+        - desembolsos com imobilizado
+        - pagamentos por aquisicao de imobilizado
+        - pagamentos por aquisicao de imobilizado e intangivel
+        - aquisicao de ativos intangiveis
+        - adicoes ao intangivel
+        - investimentos em intangivel
+        - investimentos em ativos intangiveis
+        - capitalizacao de custos em imobilizado
+        - capitalizacao de custos em intangivel
+        - imobilizado em curso desembolsos
+        - aquisicao de imobilizado e intangivel, liquidos de baixas
+      datatype: currency
+      required: false
+      description: Capital expenditures (cash outflows for PP&E and intangible additions).
+
+    cfi:
+      primary: CFI
+      aliases:
+        # Net cash from investing activities
+        - caixa liquido proveniente das atividades de investimento
+        - caixa liquido gerado pelas atividades de investimento
+        - caixa liquido das atividades de investimento
+        - caixa liquido aplicado nas atividades de investimento
+        - caixa liquido consumido nas atividades de investimento
+        - caixa liquido utilizado nas atividades de investimento
+        - fluxo de caixa das atividades de investimento
+        - fluxo de caixa liquido das atividades de investimento
+        - recursos liquidos utilizados nas atividades de investimentos
+        - recursos liquidos gerados nas atividades de investimentos
+        # Some companies append details; keep full-line variants you showed
+        - caixa liquido aplicado nas atividades de investimento titulos e valores mobiliarios
+        - caixa liquido atividades de investimento
+        - caixa liquido atividades de investimento aplicacoes financeiras
+        - caixa liquido das atividades de investimentos
+        - fluxo de caixa liquido utilizado nas atividades de investimento
+      datatype: currency
+      required: false
+      description: Net cash from investing activities (typically outflow).

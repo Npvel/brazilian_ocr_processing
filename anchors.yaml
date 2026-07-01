@@ -1,0 +1,146 @@
+# =============================================================================
+# anchors.yaml — Anchor lexicon for primary financial-statement detection
+# =============================================================================
+# This file is the SINGLE SOURCE OF TRUTH for which line-item names mark a
+# *primary* financial statement (vs. a note / segment table). Business analysts
+# can edit it WITHOUT touching code.
+#
+# How matching works (see anchor_match in the classifier):
+#   1. Both the anchor `canon` and the page line are NORMALIZED:
+#        strip accents -> lowercase -> drop "(Nota XX)" / leading "(+)(-)(=)"
+#        -> drop punctuation -> drop stopwords.
+#   2. A line MATCHES an anchor iff:
+#        - every SIGNIFICANT canon token is present in the line, AND
+#        - every EXTRA line token is in `benign_insertions` (no foreign word
+#          such as "circulante"/"segmento" that would narrow a TOTAL into a
+#          SUBTOTAL), AND
+#        - fuzzy token_sort_ratio >= match_threshold (OCR-typo backstop).
+#   3. Per-statement "completeness": a page is a PRIMARY candidate for a
+#      statement only when its REQUIRED anchor set is satisfied.
+#
+# Why per-anchor canon tokens matter: a word like "investimentos" is foreign to
+# "Total do ativo" but is a REQUIRED part of the cash-flow investing section.
+# The word is not globally good/bad — it depends on the anchor it is tested
+# against. That is why each entry carries its own full canonical phrase.
+# =============================================================================
+
+# Tunable matching parameters ------------------------------------------------
+match_threshold: 85          # min token_sort_ratio for a fuzzy anchor match
+
+# Stopwords removed before token comparison (Portuguese function words).
+stopwords:
+  [de, do, da, dos, das, e, no, na, "o", "a", os, as, para, com, em, ao, aos]
+
+# Benign insertions: words that may appear INSIDE a canonical phrase without
+# changing its identity (synonyms / parentheticals seen in real OCR output).
+# These do NOT block a match. Narrowing qualifiers (circulante, segmento, ...)
+# are deliberately NOT here — their presence as an extra token blocks a match.
+benign_insertions:
+  [utilizado, gerado, consumido, aplicado, prejuizo, prejuizos, liquido,
+   liquidas, antes,
+   # connecting prepositions seen between "atividades" and the verb in real OCR
+   # ("gerado PELAS atividades", "aplicado NAS atividades") — they do not narrow
+   # meaning, so they must not block a match.
+   pelas, pela, pelos, pelo, nas, nos]
+
+# =============================================================================
+# Statement definitions
+# =============================================================================
+statements:
+
+  # ---------------------------------------------------------------------------
+  # BALANCE SHEET — assets side + liabilities/equity side.
+  # Primary balance pages carry the closing totals AND satisfy the accounting
+  # identity  ativo = passivo + patrimonio_liquido  (validator, confidence-only).
+  # ---------------------------------------------------------------------------
+  BALANCE:
+    source_groups: [BALANCE_ASSETS_LST, BALANCE_LIABILITIES_LST]
+    # ALL of these must be present for a "complete" primary balance.
+    required_anchors:
+      - id: total_ativo
+        canon: "Total do ativo"
+        aliases: ["Total dos ativos"]          # plural variant seen in corpus
+      - id: total_passivo_pl
+        canon: "Total do passivo e patrimônio líquido"
+    # Helpful but not required (boost confidence / locate sections).
+    optional_anchors:
+      - id: total_passivo
+        canon: "Total do passivo"
+      - id: total_pl
+        canon: "Total do patrimônio líquido"
+      - id: ativo_circulante
+        canon: "Total do ativo circulante"
+      - id: ativo_nao_circulante
+        canon: "Total do ativo não circulante"
+    identity:
+      name: balance_equation
+      equation: "total_ativo == total_passivo_pl"
+      tolerance_pct: 0.5     # rounding tolerance (values are in 'milhares')
+
+  # ---------------------------------------------------------------------------
+  # INCOME STATEMENT (Demonstração do Resultado).
+  # Recognized by the canonical chain top->bottom. Order is validated by the
+  # disambiguator, not required for the raw match.
+  # ---------------------------------------------------------------------------
+  INCOME:
+    source_groups: [INCOME_STATEMENT_LST]
+    required_anchors:
+      - id: receita_liquida
+        canon: "Receita operacional líquida"
+        aliases: ["Receita líquida", "Receita líquida de vendas"]
+      - id: lucro_liquido_exercicio
+        canon: "Lucro líquido do exercício"
+        aliases: ["Lucro líquido (prejuízo) do exercício",
+                  "Lucro líquido / prejuízo do exercício"]
+    optional_anchors:
+      - id: lucro_bruto
+        canon: "Lucro bruto"
+      - id: resultado_antes_impostos
+        canon: "Resultado antes do imposto de renda e contribuição social"
+        aliases: ["Lucro antes do imposto de renda e contribuição social"]
+      - id: resultado_financeiro
+        canon: "Resultado financeiro"
+    # Canonical top->bottom order, used by the sequence disambiguator.
+    ordered_chain: [receita_liquida, lucro_bruto, resultado_antes_impostos,
+                    lucro_liquido_exercicio]
+
+  # ---------------------------------------------------------------------------
+  # CASH FLOW (Demonstração dos Fluxos de Caixa) — indirect method.
+  # The STRONGEST completeness signal in the corpus: a real cash-flow page
+  # carries ALL THREE activity sections. Notes that merely mention one
+  # cash-flow-like line do not — this single rule separated 1 real page from 41.
+  # ---------------------------------------------------------------------------
+  CASH_FLOW:
+    source_groups: [CASH_FLOW_LST]
+    required_anchors:
+      - id: cf_operacional
+        canon: "Caixa líquido das atividades operacionais"
+        aliases: ["Caixa líquido (utilizado) gerado nas atividades operacionais",
+                  "Caixa líquido gerado nas atividades operacionais",
+                  "Caixa líquido gerado pelas atividades operacionais",
+                  "Caixa líquido aplicado nas atividades operacionais",
+                  "Caixa líquido utilizado nas atividades operacionais"]
+      - id: cf_investimento
+        canon: "Caixa líquido das atividades de investimentos"
+        aliases: ["Caixa líquido (utilizado) gerado nas atividades de investimentos",
+                  "Caixa líquido aplicado nas atividades de investimento",
+                  "Caixa líquido gerado pelas atividades de investimento",
+                  "Caixa líquido das atividades de investimento"]
+      - id: cf_financiamento
+        canon: "Caixa líquido das atividades de financiamentos"
+        aliases: ["Caixa líquido (utilizado) gerado nas atividades de financiamentos",
+                  "Caixa líquido aplicado nas atividades de financiamento",
+                  "Caixa líquido gerado pelas atividades de financiamento",
+                  "Caixa líquido das atividades de financiamento"]
+    optional_anchors:
+      - id: caixa_inicio
+        canon: "Caixa e equivalentes de caixa no início do exercício"
+        aliases: ["Caixa e equivalentes de caixa no início do período"]
+      - id: caixa_fim
+        canon: "Caixa e equivalentes de caixa no fim do exercício"
+        aliases: ["Caixa e equivalentes de caixa no final do exercício",
+                  "Caixa e equivalentes de caixa no fim do período"]
+    identity:
+      name: cash_reconciliation
+      equation: "caixa_inicio + net_change == caixa_fim"
+      tolerance_pct: 0.5

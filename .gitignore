@@ -1,0 +1,52 @@
+# ============================================================================
+# Confidential DATA — never publish. These are real Brazilian company filings
+# and everything generated from them. The repo ships CODE + CONFIG only; bring
+# your own OCR JSON to run it.
+# ============================================================================
+
+# All JSON (sample inputs, structured outputs, quality reports, baselines)...
+*.json
+# ...EXCEPT the SBS field->alias mapping, which is required CONFIG the app loads
+# at runtime (structure_ocr / sbs_labeler read it via __file__). Keep it tracked.
+!sbs_label_mapping.json
+
+# All Excel (generated reports + the source SBS-fields workbook + Office locks)
+*.xlsx
+~$*.xlsx
+
+# Images — screenshots may show confidential financial tables. None are needed
+# by the tool; force-add a specific asset (e.g. a logo) with `git add -f` if ever required.
+*.png
+*.jpg
+*.jpeg
+
+# ============================================================================
+# Internal / local — not part of the shippable tool
+# ============================================================================
+
+# R&D scratch (benchmarks, baselines, experiments)
+sbs_redesign/
+
+# Local Claude Code settings (settings.local.json)
+.claude/
+
+# One-off snapshot helper tied to local data
+_baseline_snapshot.py
+
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ============================================================================
+# Editor / OS
+# ============================================================================
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
