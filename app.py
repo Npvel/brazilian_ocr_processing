@@ -22,6 +22,7 @@ Run:
 """
 
 import html
+import hashlib
 import json
 import os
 import sys
@@ -167,6 +168,9 @@ def inject_css():
     border-top:1px solid #c2d0e0; border-bottom:1px solid #c2d0e0;
   }
   tr.derived td { background:#fff6e0 !important; font-style:italic; }
+  /* a line flagged needs_review: light red as in the workbook, the reason in the Review column */
+  tr.review td { background:#FDECEA !important; }
+  table.stmt td.rev { color:#B42318; font-size:11.5px; }
 
   .dot { color:#DAA900; font-size:15px; margin-right:7px; vertical-align:-1px; }
   .sbs-name { color:#003781; font-weight:700; }
@@ -179,6 +183,8 @@ def inject_css():
   .b-review { background:#FFF1D6; color:#9a6b00; border:1px solid #f0d49a; }
   .b-cross  { background:#eef0ff; color:#3a44a0; border:1px solid #c9cdf0; }
   .b-derived{ background:#fde9c8; color:#8a5a00; border:1px solid #f0cf9a; }
+  .b-words{ background:#fff4cc; color:#8a6100; border:1px solid #f0dc8f; }
+  .w-rec { font-style:italic; color:#8a6100; background:#fff4cc; padding:0 3px; border-radius:3px; }
 
   .empty-note { color:#7c8896; font-size:13px; padding:14px 4px; font-style:italic; }
 
@@ -296,15 +302,43 @@ def fmt_amount_html(num):
 
 
 # --------------------------------------------------------------------------- #
-# Cached pipeline + workbook build
+# Pipeline + workbook build, memoized PER BROWSER SESSION
 # --------------------------------------------------------------------------- #
-@st.cache_data(show_spinner=False)
-def load_and_process(file_bytes, filename):
+# Not st.cache_data: that cache is APP-WIDE (shared by every user of a deployed app, kept in the
+# server's memory until restart) and the old Excel key (file name + JSON length) could even hand one
+# user's workbook to another user who uploaded a different file with the same name and length.
+# st.session_state lives only in the user's own session and holds only the current document.
+def _session_memo(key, fn, *args):
+    store = st.session_state.setdefault("_memo", {})
+    if key not in store:
+        if len(store) > 4:            # current document (+ its workbook) only
+            store.clear()
+        store[key] = fn(*args)
+    return store[key]
+
+
+def _digest(*blobs):
+    h = hashlib.sha256()
+    for b in blobs:
+        h.update(b or b"")
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def load_and_process(file_bytes, filename, words_bytes=None):
+    """(output, report, mode) for an upload, computed once per session and content."""
+    return _session_memo(("doc", _digest(file_bytes, words_bytes)), _load_and_process,
+                         file_bytes, filename, words_bytes)
+
+
+def _load_and_process(file_bytes, filename, words_bytes=None):
     """Parse the upload and return (output, report, mode).
-    mode: 'raw' (ran Stages 1-3) or 'structured' (used as-is)."""
+    mode: 'raw' (ran Stages 1-3) or 'structured' (used as-is). `words_bytes` = the OPTIONAL
+    reciTAL OCR words layer: when given, lost cells / lines / labels are recovered from it."""
     data = json.loads(file_bytes.decode("utf-8"))
     if isinstance(data, list):
-        output, report = structure_ocr.process(data)
+        words = json.loads(words_bytes.decode("utf-8")) if words_bytes else None
+        output, report = structure_ocr.process(data, words=words)
         return output, report, "raw"
     if isinstance(data, dict) and "statements" in data:
         return data, None, "structured"
@@ -314,12 +348,15 @@ def load_and_process(file_bytes, filename):
     )
 
 
-@st.cache_data(show_spinner=False)
-def build_excel_bytes(_output, cache_key):
-    """Byte-for-byte the same workbook export_excel.py writes from the CLI.
-    `_output` is excluded from the cache key (leading underscore); `cache_key`
-    (filename + size) keys the cache."""
-    wb, _doc_type, _counts = export_excel.build_workbook(_output)
+def build_excel_bytes(output):
+    """Byte-for-byte the same workbook export_excel.py writes from the CLI — built in memory
+    (never written to disk), once per session and document."""
+    key = ("xlsx", _digest(json.dumps(output, ensure_ascii=False, sort_keys=True).encode("utf-8")))
+    return _session_memo(key, _build_excel_bytes, output)
+
+
+def _build_excel_bytes(output):
+    wb, _doc_type, _counts = export_excel.build_workbook(output)
     bio = BytesIO()
     wb.save(bio)
     return bio.getvalue()
@@ -330,15 +367,10 @@ def build_excel_bytes(_output, cache_key):
 # entirely to export_excel so the screen and the workbook never disagree.
 # --------------------------------------------------------------------------- #
 def passing_rows(statements, doc_type, group_key):
-    """List of (row, amount_n_minus_1, amount_n) the exporter would write."""
-    grp = statements.get(group_key, []) or []
-    bypass = export_excel.is_small_span(grp)
-    out = []
-    for r in grp:
-        if export_excel.row_passes(r, doc_type, bypass):
-            nm1, n = export_excel.pick_amounts(r.get("columns", []), doc_type)
-            out.append((r, nm1, n))
-    return out
+    """List of (row, amount_n_minus_1, amount_n) the exporter would write — the exporter's
+    own selection (export_excel.passing_rows: page filter, Serasa analysis cut, document-level
+    'Consolidado, else company' rule), so the screen can never disagree with the workbook."""
+    return export_excel.passing_rows(statements, doc_type, group_key)
 
 
 def doc_kpis(statements, doc_type):
@@ -366,10 +398,8 @@ def doc_kpis(statements, doc_type):
 # --------------------------------------------------------------------------- #
 def metadata_ribbon(metadata, doc_type):
     def val(key):
-        entry = metadata.get(key)
-        if isinstance(entry, dict):
-            return export_excel.clean_meta(entry.get("value"))
-        return ""
+        # same display as the workbook's metadata sheet (normalized value + OCR token)
+        return export_excel.meta_display(key, metadata.get(key))
 
     pretty = export_excel.META_PRETTY
 
@@ -395,7 +425,10 @@ def metadata_ribbon(metadata, doc_type):
 def _row_label_cell(r):
     """The 'Label · Conta' cell content, with SBS dot + badges."""
     label = r.get("label")
-    if label:
+    if label and r.get("label_source") == "ocr_words":
+        body = (f'<span class="w-rec">{esc(label)}</span>'
+                '<span class="badge b-words" title="recovered from the OCR words layer">WORDS</span>')
+    elif label:
         body = esc(label)
     elif r.get("label_missing"):
         body = '<span class="lbl-missing">— empty label · sem rótulo —</span>'
@@ -410,7 +443,7 @@ def _sbs_cell(r):
         return ""
     badges = ""
     if r.get("needs_review"):
-        reason = esc(r.get("sbs_review_reason") or "needs review")
+        reason = esc(export_excel.review_reason(r))
         badges += f'<span class="badge b-review" title="{reason}">REVIEW</span>'
     if r.get("sbs_scope") == "cross_scope":
         badges += '<span class="badge b-cross" title="match recovered out of its home statement">CROSS</span>'
@@ -419,13 +452,23 @@ def _sbs_cell(r):
     return f'<span class="dot">●</span><span class="sbs-name">{esc(sbs)}</span>{badges}'
 
 
-def statement_table(disp_rows, show_code):
-    """disp_rows: list of (row, nm1, n). Returns a full HTML table string."""
+def _amount_cell(num, cell):
+    html = fmt_amount_html(num)
+    if export_excel.is_recovered(cell):
+        return f'<span class="w-rec" title="recovered from the OCR words layer">{html}</span>'
+    return html
+
+
+def statement_table(disp_rows, show_code, doc_type=None, cons_only=None):
+    """disp_rows: list of (row, nm1, n). Returns a full HTML table string. Figures recovered
+    from the OCR words layer are marked like in the workbook (italic, light yellow); a line flagged
+    needs_review like in the workbook too (light red, the reason in the Review column)."""
     th = ['<th>SBS Label</th>',
           '<th>Label<span class="pt">Conta</span></th>',
           '<th class="ctr">Page<span class="pt">Pág.</span></th>',
           '<th class="num">AMOUNT_N-1<span class="pt">anterior</span></th>',
-          '<th class="num">AMOUNT_N<span class="pt">atual</span></th>']
+          '<th class="num">AMOUNT_N<span class="pt">atual</span></th>',
+          '<th>Review<span class="pt">Revisão</span></th>']
     if show_code:
         th.insert(0, '<th>Code<span class="pt">Código</span></th>')
     head = "<thead><tr>" + "".join(th) + "</tr></thead>"
@@ -437,6 +480,9 @@ def statement_table(disp_rows, show_code):
         is_sbs = bool(r.get("sbs_label"))
         is_derived = bool(r.get("sbs_derived"))
         cls = "derived" if is_derived else ("total" if is_total else ("sbs" if is_sbs else "detail"))
+        reason = export_excel.review_reason(r)
+        if reason:
+            cls += " review"
 
         page = r.get("page_nb")
         page_txt = "" if page is None else esc(page)
@@ -446,8 +492,10 @@ def statement_table(disp_rows, show_code):
         cells.append(f'<td>{_sbs_cell(r)}</td>')
         cells.append(f'<td>{_row_label_cell(r)}</td>')
         cells.append(f'<td class="ctr">{page_txt}</td>')
-        cells.append(f'<td class="num">{fmt_amount_html(nm1)}</td>')
-        cells.append(f'<td class="num">{fmt_amount_html(n)}</td>')
+        c_nm1, c_n = export_excel.pick_cells(r.get("columns", []), doc_type, cons_only)
+        cells.append(f'<td class="num">{_amount_cell(nm1, c_nm1)}</td>')
+        cells.append(f'<td class="num">{_amount_cell(n, c_n)}</td>')
+        cells.append(f'<td class="rev">{esc(reason)}</td>')
         body.append(f'<tr class="{cls}">' + "".join(cells) + "</tr>")
 
     return (f'<div class="stmt-wrap"><table class="stmt">{head}'
@@ -487,8 +535,47 @@ def render_section(statements, doc_type, group_key, show_code, show_title):
             unsafe_allow_html=True)
         return True
 
-    st.markdown(statement_table(disp, show_code), unsafe_allow_html=True)
+    cons_only = export_excel.consolidado_filter(statements, doc_type)
+    st.markdown(statement_table(disp, show_code, doc_type, cons_only), unsafe_allow_html=True)
     return True
+
+
+def render_sbs_fields(output, doc_type):
+    """The workbook's `sbs_fields` sheet on screen: one value per SBS field and period, how it was
+    obtained (one line / sum / printed total / identity-proven) and the accounting checks."""
+    sf = export_excel.sbs_fields_of(output) or {}
+    fields = sf.get("fields") or {}
+    if not fields:
+        st.markdown('<div class="empty-note">No SBS field could be valued for this document.</div>',
+                    unsafe_allow_html=True)
+        return
+    head = ("<thead><tr><th>SBS Field</th><th>Statement</th><th class=\"num\">AMOUNT_N-1</th>"
+            "<th class=\"num\">AMOUNT_N</th><th>How</th><th>Rows</th></tr></thead>")
+    body = []
+    for f, e in fields.items():
+        rows = "<br>".join(
+            f"p{esc(x.get('page'))} · {esc((x.get('label') or 'unnamed')[:48])} · {fmt_amount_html(x.get('AMOUNT_N'))}"
+            + ("" if x.get("used") else " <i>(not counted)</i>") for x in e.get("rows", []))
+        if e.get("note"):
+            rows += f"<br><i>{esc(e['note'])}</i>"
+        how = esc(export_excel.sbs_method_text(e))
+        if e.get("verified"):
+            how += ' <span class="badge b-cross" title="proven by an accounting identity">✓ IDENTITY</span>'
+        if e.get("needs_review"):
+            how += ' <span class="badge b-review">REVIEW</span>'
+        body.append(f'<tr class="sbs"><td><span class="dot">●</span><span class="sbs-name">{esc(f)}</span></td>'
+                    f'<td>{esc(export_excel._STMT_SHORT.get(e.get("statement"), e.get("statement") or ""))}</td>'
+                    f'<td class="num">{fmt_amount_html(e.get("AMOUNT_N-1"))}</td>'
+                    f'<td class="num">{fmt_amount_html(e.get("AMOUNT_N"))}</td><td>{how}</td><td>{rows}</td></tr>')
+    st.markdown(f'<div class="stmt-wrap"><table class="stmt">{head}<tbody>{"".join(body)}</tbody></table></div>',
+                unsafe_allow_html=True)
+    checks = sf.get("checks") or []
+    if checks:
+        items = "".join(
+            f'<li>{"✓" if c["ok"] else "✗"} {esc(c["period"])}: {esc(c["identity"].replace("Amount", ""))}</li>'
+            for c in checks)
+        st.markdown(f'<div class="src-line"><b>Accounting checks · verificações</b><ul>{items}</ul></div>',
+                    unsafe_allow_html=True)
 
 
 def render_tab(output, doc_type, groups):
@@ -528,7 +615,11 @@ def sidebar():
             "Upload OCR JSON · Carregar JSON", type=["json"],
             help="Raw OCR provider JSON (root = list) or a structured output "
                  "(root = dict with 'statements').")
-        return up
+        words_up = st.file_uploader(
+            "OCR words layer (optional) · camada words (opcional)", type=["json"],
+            help="Optional reciTAL words layer (GET /files/{id}/words/). When given, figures, "
+                 "lines and labels the extraction lost are recovered from it and marked.")
+        return up, words_up
 
 
 def sidebar_summary(output, report, mode, doc_type, kpis, up_name):
@@ -550,7 +641,7 @@ def sidebar_summary(output, report, mode, doc_type, kpis, up_name):
         st.markdown("---")
 
         stem = os.path.splitext(up_name)[0]
-        xlsx = build_excel_bytes(output, f"{up_name}:{len(json.dumps(output))}")
+        xlsx = build_excel_bytes(output)
         st.download_button(
             "⬇  Download Excel · Baixar Excel", data=xlsx,
             file_name=f"{stem}_report.xlsx",
@@ -571,7 +662,7 @@ def sidebar_summary(output, report, mode, doc_type, kpis, up_name):
 # --------------------------------------------------------------------------- #
 def main():
     inject_css()
-    up = sidebar()
+    up, words_up = sidebar()
 
     if up is None:
         st.markdown(
@@ -596,7 +687,8 @@ def main():
     file_bytes = up.getvalue()
     try:
         with st.spinner("Processing · processando…"):
-            output, report, mode = load_and_process(file_bytes, up.name)
+            output, report, mode = load_and_process(
+                file_bytes, up.name, words_up.getvalue() if words_up is not None else None)
     except Exception as exc:
         st.error(f"Could not read this file · não foi possível ler o arquivo:\n\n{exc}")
         return
@@ -613,15 +705,17 @@ def main():
                 unsafe_allow_html=True)
     st.markdown(metadata_ribbon(metadata, doc_type), unsafe_allow_html=True)
 
-    tabs = st.tabs([t[1] for t in TABS])
+    tabs = st.tabs([t[1] for t in TABS] + ["SBS fields · Campos SBS"])
     for tab, (_key, _title, groups) in zip(tabs, TABS):
         with tab:
             render_tab(output, doc_type, groups)
+    with tabs[-1]:
+        render_sbs_fields(output, doc_type)
 
     # Download also available below the tables, as requested.
     st.markdown("---")
     stem = os.path.splitext(up.name)[0]
-    xlsx = build_excel_bytes(output, f"{up.name}:{len(json.dumps(output))}")
+    xlsx = build_excel_bytes(output)
     st.download_button(
         "⬇  Download Excel · Baixar relatório", data=xlsx,
         file_name=f"{stem}_report.xlsx",

@@ -184,6 +184,47 @@ def parse_amount(s):
 
 
 # --------------------------------------------------------------------------- #
+# Document number format (Brazilian "1.234,56" vs US "1,234.56")
+# --------------------------------------------------------------------------- #
+# A filing of a foreign-owned company may print US-style figures (Documento1 / Solae, an IFF
+# company: "193,081"). parse_amount reads the comma as a DECIMAL comma -> 193.081, i.e. the whole
+# document came out 1000x too small and sums mixing "596" with "16,091" broke. The format is a
+# property of the DOCUMENT: detect it once (Stage 1), then rewrite US figures in the Brazilian
+# notation so every downstream parser stays unchanged (the original string is kept as value_raw).
+_BR_EVIDENCE = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?\)?$|\d,\d{1,2}\)?%?$")
+_US_EVIDENCE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?$|\d\.\d{1,2}\)?%?$")
+_US_GROUPED = re.compile(r"^([\(\[]?-?\s?)(\d{1,3}(?:,\d{3})+)(\.\d+)?([\)\]]?)$")
+_US_DECIMAL = re.compile(r"^([\(\[]?-?\s?)(\d+)\.(\d{1,2})([\)\]]?)$")
+US_FORMAT_MIN_EVIDENCE = 5
+
+
+def detect_number_format(values):
+    """'US' when US-style grouping clearly dominates the document's figures, else 'BR'."""
+    br = us = 0
+    for v in values:
+        t = (v or "").strip()
+        br += bool(_BR_EVIDENCE.search(t))
+        us += bool(_US_EVIDENCE.search(t))
+    return "US" if us >= US_FORMAT_MIN_EVIDENCE and us > 10 * br else "BR"
+
+
+def to_br_number(s):
+    """Rewrite one US-style figure in Brazilian notation ('193,081' -> '193.081',
+    '(1,234.5)' -> '(1.234,5)', '7.95' -> '7,95'); anything else is returned unchanged."""
+    if s is None:
+        return s
+    t = str(s).strip()
+    m = _US_GROUPED.match(t)
+    if m:
+        dec = ("," + m.group(3)[1:]) if m.group(3) else ""
+        return f"{m.group(1)}{m.group(2).replace(',', '.')}{dec}{m.group(4)}"
+    m = _US_DECIMAL.match(t)
+    if m:
+        return f"{m.group(1)}{m.group(2)},{m.group(3)}{m.group(4)}"
+    return s
+
+
+# --------------------------------------------------------------------------- #
 # Geometry
 # --------------------------------------------------------------------------- #
 def yc(loc):

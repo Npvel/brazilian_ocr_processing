@@ -183,6 +183,15 @@ statements:
 | `benign_insertions` | Words allowed to appear *inside* a canonical phrase without breaking the match (see §5). |
 | `stopwords` | Portuguese function words removed before comparison. |
 
+> **Verbatim aliases (2026-11-04).** The fuzzy backstop compares the WHOLE phrases, so a canon with several
+> benign words inserted («Fluxo de caixa líquido proveniente das (utilizado nas) atividades de investimento»)
+> falls under the threshold (78–81 < 85) even though every token is covered. Such forms are listed verbatim:
+> `cf_operacional` «Fluxo de caixa líquido gerado nas atividades operacionais» (Delfia p9) and «… proveniente
+> das (utilizado nas) atividades operacionais» (São Salvador p25); `cf_investimento` «Caixa líquido utilizado
+> nas atividades de investimento» (Entrepay p9) and the São Salvador form; `cf_financiamento` «Caixa líquido
+> proveniente das atividades de financiamento» (Entrepay p9) and the São Salvador form. `proveniente` was
+> deliberately NOT added to `benign_insertions`: that list is shared with the Stage-3 SBS matcher.
+
 ### Why each anchor carries its **own** full canonical phrase
 
 A word such as `investimentos` is **foreign** to `Total do ativo` but is a **required** part of the
@@ -292,11 +301,22 @@ Layer 2. They are separated by:
 
 1. **Column count** — a primary statement has 2 or 4 amount columns; a segment note fans out into
    many (page 51 → 7, page 132 → 9). `n_cols > 4` ⇒ tag as `NOTE_segment` even if complete.
+   **Per panel (2026-11-04):** the column model describes ONE table. On a side-by-side page (Ativo |
+   Passivo on the same lines — the panels of Stage 1, `structure_ocr.build_panels`, passed to `classify`
+   as `panel_of`) whose panels print more than 4 columns in total, the count is taken per panel (the
+   widest one). Delfia p5 printed 4 + 2 bands of LST figures = 6 → the whole balance was a
+   "segment note" and vanished from the Excel (audit DEL1); per panel it is 4 → `PRIMARY:BALANCE`, the
+   reason reads «6 columns on the page = 2 side-by-side panels, at most 4 per panel». Pages within 4
+   columns keep their page-level count and their verdict text unchanged.
 2. **Page order** — the primary block appears earlier and in canonical order
    (Balance → Income → Cash-Flow); later complete copies are notes.
 3. **Repeated anchor set** — the same complete set appearing a second time marks the first as
    primary and the rest as notes (unless they are a legitimate Individual vs. Consolidado split —
-   see §11).
+   see §11). **A split prints whole (N, N-1) column pairs** (2 or 4 columns, e.g. Raízen income 4-col p22
+   vs 2-col p46/47). A repeat with a different but **odd** column count is a reconciliation table —
+   «Originalmente apresentado | Ajustes | Reapresentado» of a restatement note — and is demoted to
+   `NOTE_segment` (Dom Atacarejo p14, audit DOM9: 32 note rows had reached the Excel and doubled the debt
+   and interest fields).
 
 ### Layer 3b — Positional safety-net (sequence-based recovery)
 
@@ -308,16 +328,45 @@ one family is missing, a nearby strong-but-incomplete page is very likely that m
 It promotes such a page to `PRIMARY` only when **all** of these hold:
 
 1. **A real block exists** — at least `POSITIONAL_MIN_PRIMARY_FAMILIES` (= 2) families are already
-   primary. With no trustworthy block, nothing is inferred.
+   primary, **or a primary BALANCE** (`POSITIONAL_ANCHOR_FAMILY`). In Brazilian filings the
+   statements always follow the balance in a fixed order (BP → DRE → DRA → DMPL → DFC → DVA), so a
+   confirmed balance alone is a trustworthy block start. With no trustworthy block, nothing is inferred.
 2. **The family is still missing** — it has no primary page yet.
 3. **Partial anchor evidence** — the candidate carries **≥ 1** of the family's required anchors.
    *Promotion never happens on column layout alone* — this is what prevents "any note with columns"
-   from being mislabelled.
+   from being mislabelled. (Second attempt, content-based: ≥ 5 of the family's line-items on an
+   adjacent primary-like page, confidence 0.5.)
 4. **Right position & shape** — within `POSITIONAL_BLOCK_RADIUS` (= 4) pages after the block, with a
-   primary-like column count (≤ 4).
+   primary-like column count (≤ 4). **The window follows the canonical sequence**: once a family is
+   promoted, the next family is searched after it (a 2-page DMPL must not push the DFC out of range).
+   **The block's end is taken in canonical order** (`_block_end`, 2026-11-04): a primary page of an
+   EARLIER family printed after a later family's page is out of sequence and does not move the window —
+   Delfia p11 (note 1.2, the balance of an absorbed subsidiary, printed after the DRE p6) pushed the search
+   for the DFC to pages 12–15 while the DFC was p9 (audit DEL2).
 
 Promoted pages are marked `needs_review: true` with **low confidence** (0.55) and a full reason in
 `reasons`, so the inference is explicit and auditable — never a silent guess.
+
+> **Why the balance-anchored block (2026-11).** On the reciTAL corpus (22 PDFs, agent
+> `Brazil_OCR202606_V4`) three filings (Nissan, 1Q26 União Química, Grupo Moreno) had only the
+> balance detected: their DRE/DFC wording (`Lucro (prejuízo) do exercício`, `Lucro líquido do
+> período`, `Receita`, `Caixa líquido consumido pelas …`, `… de investimentos` plural) missed the
+> lexicon, so the old ≥ 2-families gate never fired and the PRIMARY-only Excel filter dropped
+> **both** statements. The aliases were added to `anchors.yaml` and the gate now also accepts a
+> primary balance. Measured with `harness/run.py`: 6 missing statements → 0; the other 19 documents
+> unchanged.
+
+### Layer 3c — Multi-page continuation (INCOME / CASH_FLOW)
+
+A DRE or DFC printed over two pages: the page right after a primary page is the **same statement's
+continuation** when **all** hold — the primary page lacks the family's **closing** anchor
+(`lucro_liquido_exercicio` / `cf_financiamento`), so the statement visibly continues; the next page
+is a plain `NOTE` (never a demoted repeat `NOTE_segment`, never `JUNK`); ≥ 3 and ≥ 70 % of its
+line-items belong to the family; same column count; no required anchor of another family. Promoted
+as a flagged primary (confidence ≤ 0.6). Without it the second page is filtered out of the Excel —
+and the page-kind split defeats the Stage-3 duplicate merge across the two pages (Alvorada p4/p5:
+the net income printed on both pages appeared twice). A page that is an exact **duplicate** of the
+primary page inside the PDF (RECONTEC p10 = p9) carries the closing anchor and stays a demoted repeat.
 
 > **Why a safety-net, not a detector.** Inferring a statement purely from position ("the next page
 > with N/N-1 columns") would mislabel the many notes that follow the primary block. Requiring
@@ -438,6 +487,8 @@ no code change required. Tunable knobs:
 | `diagnose_pages.py` | x-band `gap` (0.04) | Column-count sensitivity. |
 | `classify_statements.py` | `POSITIONAL_BLOCK_RADIUS` (4) | How many pages after the block Layer 3b searches. |
 | `classify_statements.py` | `POSITIONAL_MIN_PRIMARY_FAMILIES` (2) | How solid the block must be before Layer 3b infers. |
+| `classify_statements.py` | `POSITIONAL_ANCHOR_FAMILY` (`BALANCE`) | A primary balance alone also opens the block (canonical start). |
+| `classify_statements.py` | `CLOSING_ANCHOR`, `CONTINUATION_MIN_ROWS` (3), `CONTINUATION_MIN_SHARE` (0.7) | Layer 3c: when the next page continues a DRE/DFC. |
 | `classify_statements.py` | `POSITIONAL_PROMOTE_CONFIDENCE` (0.55) | Confidence assigned to a safety-net promotion. |
 
 ---
@@ -482,6 +533,11 @@ back into the design:
 3. **Threshold calibration.** `match_threshold`, density, column cutoffs, and the positional
    constants are set from two samples; they will be tuned against a small labelled set as testing
    proceeds.
+4. **ITR forms are not detected as PRIMARY** (wording «Ativo Total», «Caixa Líquido Atividades …»). Harmless
+   for the Excel — ITR ignores `page_class` and exports only the CVM form pages (pages carrying account codes,
+   `selection.form_pages`, audit 2026-11-04) — but `page_class` of an ITR is not a reliable signal.
+5. **`diagnose_pages.py`** is a read-only preview with its own simplified signals: it still counts columns
+   per page, not per panel, and has no odd-repeat / canonical-block rules. The classifier is the reference.
 
 ---
 

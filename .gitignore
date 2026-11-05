@@ -10,9 +10,10 @@
 # at runtime (structure_ocr / sbs_labeler read it via __file__). Keep it tracked.
 !sbs_label_mapping.json
 
-# All Excel (generated reports + the source SBS-fields workbook + Office locks)
+# All Excel (generated reports + the source SBS-fields workbook)
 *.xlsx
-~$*.xlsx
+# Office lock files of ANY open document (Word / Excel / PowerPoint: ~$name.docx, ~$name.xlsx …)
+~$*
 
 # Images — screenshots may show confidential financial tables. None are needed
 # by the tool; force-add a specific asset (e.g. a logo) with `git add -f` if ever required.
@@ -24,8 +25,18 @@
 # Internal / local — not part of the shippable tool
 # ============================================================================
 
+# reciTAL downloads and audit outputs (confidential documents)
+_recital/
+_inbox/
+_audit/
+*.pdf
+
 # R&D scratch (benchmarks, baselines, experiments)
 sbs_redesign/
+
+# One-off scripts, agent working folders, golden backups — their text dumps (*.txt, *.md) carry
+# figures of the confidential filings, so the whole folder stays local
+_temp/
 
 # Local Claude Code settings (settings.local.json)
 .claude/

@@ -76,17 +76,25 @@ JOIN = [
      "No old anchor."),
     ("provisions",             "Balance Sheet", "SHORT_TERM_PROVISIONS / LONG_TERM_PROVISIONS", None, "new", False,
      "Balance-sheet provisions. NOTE: old PROVISION anchor is PECLD (cash-flow "
-     "doubtful-account allowance) — a DIFFERENT concept — so it is NOT reused here."),
+     "doubtful-account allowance) — a DIFFERENT concept — so it is NOT reused here. "
+     "User decision 2026-11-05: IAS 37 liabilities only (contingencies / lawsuits, decommissioning, "
+     "warranties, onerous contracts), current + non-current summed; balance liabilities only."),
     ("shareholdersFundsAmount","Balance Sheet", "SHAREHOLDERS_FUNDS", "TOTAL_EQUITY", "semantic", False,
      "patrimonio liquido."),
-    ("longTermLiabilitiesAmount","Balance Sheet","NON_CURRENT_LIABILITIES", "NON_CURRENT_LIABILITIES", "exact", False,
-     "passivo nao circulante (total)."),
-    ("financialLiabilitiesLongTerm","Balance Sheet","LONG_TERM_BORROWINGS", "LONG_TERM_DEBT", "semantic", False,
-     "emprestimos e financiamentos (nao circulante)."),
-    ("shortTermLiabilitiesAmount","Balance Sheet","TOTAL_CURRENT_LIABILITIES", "CURRENT_LIABILITIES", "semantic", False,
-     "passivo circulante (total)."),
-    ("financialLiabilitiesShortTerm","Balance Sheet","SHORT_TERM_BORROWINGS", "SHORT_TERM_DEBT", "semantic", False,
-     "emprestimos e financiamentos (circulante)."),
+    # USER MAPPING 2026-11-04 (pinned by the business owner, overrides the xlsx Description column):
+    #   financialLiabilitiesLongTerm / ShortTerm = the TOTAL non-current / current liabilities,
+    #   longTermLiabilitiesAmount / shortTermLiabilitiesAmount = long- / short-term CREDITS AND LOANS
+    #   (empréstimos e financiamentos, debêntures ...). The xlsx text reads the other way round.
+    # The rows keep their alias-set order (totals, loans, totals, loans) so the matcher sees the
+    # same variants in the same order as before the swap — only the field names moved.
+    ("financialLiabilitiesLongTerm","Balance Sheet","LONG_TERM_BORROWINGS", "NON_CURRENT_LIABILITIES", "field_override", False,
+     "passivo nao circulante (total) — user mapping 2026-11-04: financialLiabilitiesLongTerm = total non-current liabilities."),
+    ("longTermLiabilitiesAmount","Balance Sheet","NON_CURRENT_LIABILITIES", "LONG_TERM_DEBT", "field_override", False,
+     "emprestimos e financiamentos (nao circulante) — user mapping 2026-11-04: longTermLiabilitiesAmount = long-term credits and loans."),
+    ("financialLiabilitiesShortTerm","Balance Sheet","SHORT_TERM_BORROWINGS", "CURRENT_LIABILITIES", "field_override", False,
+     "passivo circulante (total) — user mapping 2026-11-04: financialLiabilitiesShortTerm = total current liabilities."),
+    ("shortTermLiabilitiesAmount","Balance Sheet","TOTAL_CURRENT_LIABILITIES", "SHORT_TERM_DEBT", "field_override", False,
+     "emprestimos e financiamentos (circulante) — user mapping 2026-11-04: shortTermLiabilitiesAmount = short-term credits and loans."),
     ("tradeCreditorsAmount",   "Balance Sheet", "TRADE_CREDITORS_CURRENT", "PAYABLES", "semantic", False,
      "fornecedores."),
     ("totalLiabilitiesAmount", "Balance Sheet", "TOTAL_LIABILITIES", None, "new", False,
@@ -167,6 +175,10 @@ EXTRA_ALIASES = {
         "aplicacoes financeiras de longo prazo",
         "aplicacoes financeiras nao circulante",
         "titulos e valores mobiliarios de longo prazo",
+        # audit 2026-11-04: Serasa «TOT INVESTIMENTOS»; ITR 1.02.01.01 «Aplicações Financeiras Avaliadas
+        # a Valor Justo através do Resultado» (WEG, ZAMP) — shared with cash (securities twin group)
+        "tot investimentos",
+        "aplicacoes financeiras avaliadas a valor justo atraves do resultado",
     ],
     # --- lexicon gaps found auditing real reports (HIGH confidence) ---------
     # Bare operating result (no 'bruto' -> that is gross profit; the foreign-token
@@ -176,6 +188,34 @@ EXTRA_ALIASES = {
         "resultado operacional",
         "lucro operacional",
         "resultado operacional liquido",
+        # full EBIT captions that ALSO name the taxes (corpus audit 2026-11-04: Raízen p22,
+        # Moreno p6, Romagnole p8, Guabi p2, MBP p11). The extra tokens 'imposto' / 'renda' /
+        # 'contribuicao' are foreign to the short EBIT aliases and 'resultado financeiro' is
+        # foreign to the pre-tax ones, so without these the EBIT line stayed unlabelled.
+        "lucro antes do resultado financeiro e do imposto sobre a renda e da contribuicao social",
+        "lucro antes do resultado financeiro e do imposto de renda e da contribuicao social",
+        "lucro antes do resultado financeiro e dos impostos",
+        "lucro antes das receitas despesas financeiras liquidas e impostos",
+        "resultado antes das receitas despesas financeiras liquidas e impostos",
+        "resultado antes do efeito financeiro",
+        # ALUBAR p7 (ALL-CAPS, merged by the Stage-1 «E» continuation rule)
+        "resultado antes do resultado financeiro imposto de renda e contribuicao social",
+        "resultado antes do resultado financeiro e do imposto de renda e da contribuicao social",
+        # audit 2026-11-04 (DIMENSIONAL p2, Delfia p6)
+        "lucro antes das receitas e despesas financeiras",
+        "resultado antes das receitas e despesas financeiras",
+        "resultado operacional antes do resultado financeiro",
+        "lucro operacional antes do resultado financeiro",
+    ],
+    # 'Lucro operacional bruto' = gross profit (the 'bruto' token is foreign to the bare
+    # 'lucro operacional' EBIT alias, so the line stayed unlabelled: MBP p11, Nissan p8).
+    "grossProfitAmount": [
+        "lucro operacional bruto",
+    ],
+    # SERASA closes its DRE with 'GIR DA ATIVIDADE (EBITDA)' (6 of 7 Serasa reports).
+    "ebitdaAmount": [
+        "gir da atividade ebitda",
+        "ebitda",
     ],
     # 'Provisão para IR / CSLL' phrasings: the leading 'provisao' is a foreign
     # token against the bare 'imposto de renda' alias, so these need explicit
@@ -184,12 +224,29 @@ EXTRA_ALIASES = {
         "provisao para imposto de renda",
         "provisao para contribuicao social",
         "provisao para imposto de renda e contribuicao social",
+        # corpus audit 2026-11-04 (ALUBAR p7, DUTRA p2, Raízen p22, Documento1 p2)
+        "impostos sobre o lucro",
+        "imposto sobre a renda e contribuicao social",
+        "ir e contribuicao social",
+        "ir e contribuicao social correntes",
+        "ir e contribuicao social diferidos",
+        "imposto de renda pessoa juridica irpj",
+        "contribuicao social sobre o lucro liquido cssl",
     ],
     # COGS sub-forms with 'vendidos' (sold) rather than 'prestados' (rendered).
     "rawMaterialsAndConsumablesAmount": [
         "custos de servicos vendidos",
         "custo de servicos vendidos",
         "custos de mercadorias revendidas",
+        # corpus audit 2026-11-04: the plain cost-of-sales caption was missing (Moreno p6,
+        # Romagnole p8, Guabi p2); 'CUSTO INDL/COML' = Serasa's custo industrial/comercial.
+        "custo das vendas",
+        "custos das vendas",
+        "custo indl coml",
+        # audit 2026-11-04 (Benoit p4: «(-) CUSTO DAS MERC. E SERVIÇOS»)
+        "custo das merc e servicos",
+        "custo das mercadorias e servicos",
+        "custos das mercadorias e servicos",
     ],
     # Pre-tax profit, full "...e contribuição social" forms (with 'imposto sobre
     # a renda' as well as 'imposto de renda'). The existing pretax aliases stop
@@ -201,6 +258,12 @@ EXTRA_ALIASES = {
         "resultado antes do imposto sobre a renda e contribuicao social",
         "lucro antes do imposto de renda e contribuicao social",
         "resultado antes do imposto de renda e contribuicao social",
+        "lucro do exercicio antes do ir e csll",          # Documento1 p2
+        # audit 2026-11-04 (Entrepay p6, São Salvador p22)
+        "lucro antes de irpj e csll",
+        "lucro antes do irpj e da csll",
+        "lucro operacional antes do imposto de renda e da contribuicao social",
+        "lucro operacional antes do imposto de renda e contribuicao social",
     ],
     # --- new SBS fields previously alias-less (SEMANTIC mapping — verify) ----
     # totalRemunWagesAmount = EMPLOYEE_BENEFITS_EXPENSES (despesas com pessoal,
@@ -212,10 +275,133 @@ EXTRA_ALIASES = {
         "gastos com pessoal",
         "salarios e encargos sociais",
     ],
+    # Cash-flow totals / capex captions missing from the old lexicon (corpus audit 2026-11-04:
+    # Nissan p11; Raízen p26, Eztec p6, Solar p6, RECONTEC p13, MBP p14, 1Q26 p26). NOT the
+    # intermediate 'Caixa proveniente(s) das atividades operacionais' (before interest / taxes
+    # paid — ALUBAR p10, Romagnole p11): only the 'caixa liquido ...' total is operatingCashFlow.
+    "operatingCashFlowAmount": [
+        "caixa liquido consumido pelas atividades operacionais",
+    ],
+    "capitalExpenditureAmount": [
+        "aquisicao de ativos imobilizado e intangivel",
+        "aquisicao de bens do imobilizado e intangivel",
+        "aquisicao de imobilizado ativo biologico intangivel",
+        "acrescimo do imobilizado intangivel",
+        "adicao de imobilizado",
+        "aquisicao de intangivel",
+        # audit 2026-11-04 (Unipar 6.02.03; São Salvador p25 — bio-asset purchases count as CAPEX,
+        # user decision 2026-11-04)
+        "compras de imobilizado e intangivel",
+        "compras de ativo imobilizado e intangivel",
+        "aquisicao de matrizes de producao",
+        "aquisicao de mudas de eucaliptos",
+        "aquisicao de ativos biologicos",
+        "aquisicao de ativo biologico",
+    ],
+    # depreciation: «… e Exaustão» (WEG 6.01.01.02), «… do imobilizado e intangível» (ZAMP 6.01.01.02),
+    # bio-asset amortisation (São Salvador p25 — counted, user decision 2026-11-04)
+    "depreciationAmount": [
+        "depreciacao amortizacao e exaustao",
+        "depreciacao amortizacao exaustao",
+        "depreciacao e amortizacao do imobilizado e intangivel",
+        "amortizacao do ativo biologico",
+        "amortizacao de ativos biologicos",
+        "exaustao do ativo biologico",
+    ],
+    # dividends incl. interest on own capital (JCP, the Brazilian dividend form) — WEG 6.03.04
+    "dividendAmount": [
+        "pagamento de dividendos juros s capital proprio",
+        "pagamento de dividendos e juros sobre capital proprio",
+        "pagamento de dividendos e juros sobre o capital proprio",
+        "dividendos e juros sobre capital proprio pagos",
+    ],
+    # investing cash flow, «proveniente das (utilizado nas)» wording (São Salvador p25)
+    "netCashInvestmentAmount": [
+        "fluxo de caixa liquido proveniente das utilizado nas atividades de investimento",
+        "fluxo de caixa liquido das atividades de investimento",
+    ],
+    # stock: the company's OWN inventory (Benoit p1 «ESTOQUES PRÓPRIO»; «DE TERCEIROS» = goods held
+    # for third parties, booked against an equal liability)
+    "stockAmount": [
+        "estoques proprio",
+        "estoques proprios",
+        "estoque proprio",
+    ],
+    # other non-operating income (DIMENSIONAL p2)
+    "nonTradingIncomeAmount": [
+        "outras receitas despesas nao operacionais",
+        "outras despesas receitas nao operacionais",
+        "outras receitas nao operacionais",
+    ],
+    # CREDITS AND LOANS (user mapping 2026-11-04) — Entrepay «Empréstimos e outras obrigações», Benoit
+    # «BANCOS COM EMPRESTIMOS» / «EMPRESTIMOS SÓCIOS/CLIENTES» / «MÚTUOS SÓCIOS», Serasa «TITULOS
+    # EMITIDOS» (issued notes are borrowings). Unqualified: the debt twin group resolves current /
+    # non-current (the captions are listed there as shared).
+    "shortTermLiabilitiesAmount": [
+        "emprestimos e outras obrigacoes",
+        "bancos com emprestimos",
+        "emprestimos socios clientes",
+        "emprestimos de socios",
+        "emprestimos socios",
+                "mutuos socios",
+        "titulos emitidos",
+    ],
     # interestIncomeAndSimilarAmount: financial income (receitas financeiras).
     "interestIncomeAndSimilarAmount": [
         "receitas financeiras",
         "receita financeira",
+    ],
+    # provisions (USER DECISION 2026-11-05, «Provisions and reserves for liabilities and charges», Indian
+    # SHORT_TERM_PROVISIONS + LONG_TERM_PROVISIONS): ONLY the IAS 37 liabilities — contingencies / lawsuits
+    # (tax, civil, labour), decommissioning / environmental restoration, warranties, onerous contracts —
+    # circulante + não circulante, SUMMED (an «other» field of sbs_fields). NOT provisions (no alias, keep it
+    # so): «Salários, provisões e encargos sociais» and «Provisão para férias / 13º» (payroll accruals),
+    # «Provisão para IR e CS» (taxes payable), «Provisão para perdas esperadas / PCLD» (asset allowances),
+    # «Provisão para perdas em investimentos» (an investee's negative equity), and the captions that do not
+    # say what they provide for: bare «Provisões» (Alvorada: a payroll-like current line), «Provisões
+    # diversas», «Outras provisões», «Provisões a pagar». Balance liabilities only (EXTRA_SCOPE + STRICT_SCOPE:
+    # the cash-flow adjustment «Provisões para riscos…» is never the balance figure).
+    "provisions": [
+        # contingencies / lawsuits
+        "provisoes para riscos fiscais civeis e trabalhistas",
+        "provisao para riscos fiscais civeis e trabalhistas",
+        "provisoes para riscos tributarios civeis e trabalhistas",
+        "provisao para riscos tributarios civeis e trabalhistas",
+        "provisoes tributarias civeis e trabalhistas",
+        "provisao para riscos civeis trabalhistas e tributarios",
+        "provisoes fiscais previdenciarias trabalhistas e civeis",      # CVM 2.0x.0x.01
+        "provisao para riscos",
+        "provisoes para riscos",
+        "provisao para riscos e processos judiciais",
+        "provisao para riscos trabalhistas",
+        "provisao para riscos fiscais",
+        "provisao para riscos civeis",
+        "provisao para contingencias",
+        "provisoes para contingencias",
+        "provisao para contingencias trabalhistas",
+        "provisao para contingencias fiscais",
+        "provisao para contingencias civeis",
+        "provisao para demandas judiciais",
+        "provisoes para demandas judiciais",
+        "provisao para processos judiciais",
+        "provisoes para processos judiciais",
+        "contingencias",
+        "contingencias lp",
+        # decommissioning / environmental restoration
+        "provisoes para passivos ambientais e de desativacao",          # CVM 2.0x.0x.02.03
+        "provisao para desmobilizacao",
+        "provisao para desmobilizacao de ativos",
+        "provisao para recuperacao ambiental",
+        # warranties
+        "provisao para garantia",
+        "provisao para garantias",
+        "provisao de garantia",
+        "provisao de garantias",
+        "provisao para garantia de produtos",
+        "provisao para garantias de produtos",
+        # onerous contracts (IAS 37.66)
+        "provisao de contrato oneroso",
+        "provisao para contratos onerosos",
     ],
     # NB: totalLiabilitiesAmount is INTENTIONALLY alias-less. Per the SBS xlsx
     # (#23) it is "Total liabilities (short-term + long-term + provisions)" —
@@ -227,7 +413,8 @@ EXTRA_ALIASES = {
     # usually not even printed as its own line). totalLiabilitiesAmount is
     # instead resolved ARITHMETICALLY in Stage 3 (_stage_balance_liability_totals
     # in sbs_labeler.py): it relabels a real "Total do passivo" line only when its
-    # value equals shortTerm + longTerm, otherwise synthesizes a derived row.
+    # value equals total current + total non-current liabilities (financialLiabilitiesShortTerm
+    # + financialLiabilitiesLongTerm, user mapping 2026-11-04), otherwise synthesizes a derived row.
 }
 
 # Exact-dictionary-ONLY aliases (matched verbatim by the order-sensitive dict,
@@ -252,8 +439,9 @@ AMBIGUITY_GROUPS = [
     {
         "name": "debt",
         "scope": "BALANCE_LIABILITIES_LST",
-        "current": "financialLiabilitiesShortTerm",
-        "noncurrent": "financialLiabilitiesLongTerm",
+        # credits and loans (user mapping 2026-11-04)
+        "current": "shortTermLiabilitiesAmount",
+        "noncurrent": "longTermLiabilitiesAmount",
         # the generic caption lives only in the ST set; treat as shared so an
         # unqualified row is always resolved, never silently taken as ST.
         "shared_aliases": [
@@ -261,6 +449,14 @@ AMBIGUITY_GROUPS = [
             "financiamentos",
             "debentures",
             "emprestimos",
+            # audit 2026-11-04 captions (credits and loans, either section)
+            "emprestimos e outras obrigacoes",
+            "bancos com emprestimos",
+            "emprestimos socios clientes",
+            "emprestimos de socios",
+            "emprestimos socios",
+                        "mutuos socios",
+            "titulos emitidos",
         ],
     },
     {
@@ -279,6 +475,8 @@ AMBIGUITY_GROUPS = [
             "fundos de investimento",
             "cdb rdb",
             "investimentos",
+            "tot investimentos",
+            "aplicacoes financeiras avaliadas a valor justo atraves do resultado",
         ],
     },
 ]
@@ -311,10 +509,17 @@ CVM_CODE_MAP = {
     # totalLiabilitiesAmount double-counts equity and breaks the balance identity
     # (total assets == total liabilities + shareholders' funds). totalLiabilities
     # is resolved arithmetically instead (see sbs_labeler _stage_balance_liability_totals).
-    "2.01":    "shortTermLiabilitiesAmount",
-    "2.01.04": "financialLiabilitiesShortTerm",
-    "2.02":    "longTermLiabilitiesAmount",
-    "2.02.01": "financialLiabilitiesLongTerm",
+    # user mapping 2026-11-04: section totals -> financialLiabilities*, loans -> short/longTerm*
+    "2.01":    "financialLiabilitiesShortTerm",   # Passivo Circulante (total)
+    "2.01.04": "shortTermLiabilitiesAmount",      # Empréstimos e Financiamentos (circulante)
+    "2.02":    "financialLiabilitiesLongTerm",    # Passivo Não Circulante (total)
+    "2.02.01": "longTermLiabilitiesAmount",       # Empréstimos e Financiamentos (não circulante)
+    # provisions (user decision 2026-11-05): the CVM «Provisões» groups = the IAS 37 provisions (Provisões
+    # Fiscais Previdenciárias Trabalhistas e Cíveis + Outras Provisões). WEG prints only 2.02.04 Provisões
+    # (796.530) — the bare caption cannot be an alias (Alvorada's «PROVISÕES» is a payroll-like line).
+    # Their children labelled by alias are not counted twice (sbs_fields hierarchy, code descendants).
+    "2.01.06": "provisions",                      # Provisões (circulante)
+    "2.02.04": "provisions",                      # Provisões (não circulante)
     "2.03":    "shareholdersFundsAmount",
     # Income statement
     "3.01":    "turnoverAmount",
@@ -345,10 +550,19 @@ SECTION2STMT = {
 # whose home statement is unambiguous. Lets these newly-aliased fields take part
 # in scope tie-breaking instead of being treated as scope-less.
 EXTRA_SCOPE = {
+    "ebitdaAmount": "INCOME_STATEMENT_LST",
     "totalRemunWagesAmount": "INCOME_STATEMENT_LST",
     "interestIncomeAndSimilarAmount": "INCOME_STATEMENT_LST",
     "totalLiabilitiesAmount": "BALANCE_LIABILITIES_LST",
+    "provisions": "BALANCE_LIABILITIES_LST",          # user decision 2026-11-05
 }
+
+# Fields that are NEVER kept outside their allowed statements (no cross_scope recovery in the Stage-3
+# scope-gate): a balance stock whose caption the cash flow repeats as a flow. «Provisões para riscos…»
+# in the DFC is the period's adjustment (Cibra p11: 887 / 1.767), never the balance provision (65.986 /
+# 65.099) — user decision 2026-11-05: cash-flow lines are not provisions, even when the document's
+# balance line went unlabelled.
+STRICT_SCOPE = {"provisions"}
 
 # --------------------------------------------------------------------------- #
 # Structural address per field (consumed by the Stage-3 pipeline in
@@ -373,10 +587,10 @@ HOME_SECTION = {
     "totalAssetsAmount": "grand_total",
     # liabilities + equity
     "tradeCreditorsAmount": "current",
-    "financialLiabilitiesShortTerm": "current",
-    "shortTermLiabilitiesAmount": "current_total",
-    "financialLiabilitiesLongTerm": "noncurrent",
-    "longTermLiabilitiesAmount": "noncurrent_total",
+    "shortTermLiabilitiesAmount": "current",           # ST credits and loans (user mapping 2026-11-04)
+    "financialLiabilitiesShortTerm": "current_total",  # total current liabilities
+    "longTermLiabilitiesAmount": "noncurrent",         # LT credits and loans
+    "financialLiabilitiesLongTerm": "noncurrent_total",  # total non-current liabilities
     "shareholdersFundsAmount": "equity",
     "totalLiabilitiesAmount": "grand_total",
 }
@@ -577,6 +791,8 @@ def main():
             "allow_blocking": bool(allowed),
             "aliases": deduped,
         }
+        if sbs_field in STRICT_SCOPE:
+            entry["strict_scope"] = True
         if exact_only:
             entry["exact_aliases"] = exact_only
         if merged_from:

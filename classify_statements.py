@@ -42,7 +42,13 @@ Y_ROW_TOL = 0.012
 # missing family, promote it as a flagged primary. Deliberately conservative —
 # it requires partial anchor evidence, not just "has columns".
 POSITIONAL_BLOCK_RADIUS = 4        # pages searched after the primary block
-POSITIONAL_MIN_PRIMARY_FAMILIES = 2  # block must be solid before we infer
+POSITIONAL_MIN_PRIMARY_FAMILIES = 2  # block must be solid before we infer ...
+# ... OR the block starts with a primary BALANCE: in Brazilian filings the statements
+# always follow the balance in a fixed order (BP -> DRE -> DRA -> DMPL -> DFC -> DVA), so a
+# confirmed balance alone is a trustworthy block start. Without this, a document whose
+# DRE/DFC wording misses the lexicon lost BOTH statements from the Excel (Nissan, 1Q26,
+# Grupo Moreno — reciTAL corpus 2026-11).
+POSITIONAL_ANCHOR_FAMILY = "BALANCE"
 POSITIONAL_PROMOTE_CONFIDENCE = 0.55
 # Content-based fallback (Layer 3b, second attempt): when a missing family has
 # NO anchor evidence anywhere nearby (OCR mangled ALL its anchor lines), a page
@@ -52,6 +58,17 @@ POSITIONAL_PROMOTE_CONFIDENCE = 0.55
 # anchor-backed promotion, since the evidence is purely positional + form-shape.
 POSITIONAL_MIN_CONTENT_ROWS = 5
 POSITIONAL_CONTENT_CONFIDENCE = 0.5
+
+# Multi-page statements (Layer 3c): an INCOME / CASH_FLOW statement printed over two pages.
+# The page right after a primary page is its continuation when the statement does NOT close
+# on the primary page (its closing anchor is absent there), the next page carries mostly the
+# same family's line-items, the same column layout and no other family's required anchor.
+# Without it the 2nd page stays NOTE and is filtered out of the Excel (and the page-kind
+# split also defeats the Stage-3 duplicate merge across the two pages — Alvorada p4/p5).
+CLOSING_ANCHOR = {"INCOME": "lucro_liquido_exercicio", "CASH_FLOW": "cf_financiamento"}
+CONTINUATION_MIN_ROWS = 3
+CONTINUATION_MIN_SHARE = 0.7
+CONTINUATION_CONFIDENCE = 0.6
 
 # Family -> the LST groups whose line-items constitute that family's content.
 FAMILY_GROUPS = {
@@ -64,11 +81,18 @@ FAMILY_GROUPS = {
 # --------------------------------------------------------------------------- #
 # Page feature extraction
 # --------------------------------------------------------------------------- #
-def extract_page_features(data):
+def extract_page_features(data, panel_of=None):
     """
     Returns page -> {names:[(group,raw,y)], amounts:[(y,x,period,value)],
                      ys:[...], n_rows, n_amounts, n_cols, vspan}.
     Only pages carrying LST line-items are included.
+
+    `panel_of(page, x) -> panel index` (Stage 1's side-by-side panels, see
+    structure_ocr.build_panels): the PRIMARY_MAX_COLS column model is about ONE table, so
+    on a page whose panels together print more than PRIMARY_MAX_COLS columns the count
+    is taken per panel (the widest one). Delfia p5 (audit 2026-11-04): Ativo | Passivo
+    side by side, 4 + 2 bands of LST figures = 6 > 4 -> the whole balance was demoted to a
+    segment note. Pages within the limit keep their page-level count unchanged.
     """
     groups = {el.get("group_name"): el for el in data if el.get("group_name")}
     pages = defaultdict(lambda: {"names": [], "amounts": [], "ys": []})
@@ -87,7 +111,17 @@ def extract_page_features(data):
     for pg, f in pages.items():
         f["n_rows"] = len(f["names"])
         f["n_amounts"] = len(f["amounts"])
-        f["n_cols"] = len(x_bands([x for _, x, _, _ in f["amounts"]]))
+        xs = [x for _, x, _, _ in f["amounts"]]
+        f["n_cols"] = len(x_bands(xs))
+        if panel_of is not None and f["n_cols"] > PRIMARY_MAX_COLS:
+            by_panel = defaultdict(list)
+            for x in xs:
+                by_panel[panel_of(pg, x)].append(x)
+            per_panel = max(len(x_bands(v)) for v in by_panel.values())
+            if len(by_panel) > 1 and per_panel <= PRIMARY_MAX_COLS:
+                f["n_cols_page"] = f["n_cols"]
+                f["n_cols"] = per_panel
+                f["n_panels"] = len(by_panel)
         f["vspan"] = (max(f["ys"]) - min(f["ys"])) if f["ys"] else 0.0
     return dict(pages)
 
@@ -183,8 +217,8 @@ def check_balance_identity(pg, pages, cfg, stop, benign, thr):
 # --------------------------------------------------------------------------- #
 # The pipeline
 # --------------------------------------------------------------------------- #
-def classify(data, cfg):
-    pages = extract_page_features(data)
+def classify(data, cfg, panel_of=None):
+    pages = extract_page_features(data, panel_of)
     hits, stop, benign, thr = compute_anchor_hits(pages, cfg)
 
     # First pass: per-page complete families + raw verdict, collect reasons.
@@ -224,7 +258,11 @@ def classify(data, cfg):
             reasons.append(f"{f['n_cols']} columns > {PRIMARY_MAX_COLS} -> segment/wide note")
             prelim[pg] = _verdict(f"NOTE_segment:{fam}", 0.75, reasons, complete_fams, f)
             continue
-        reasons.append(f"{f['n_cols']} columns (primary-like)")
+        if f.get("n_cols_page"):
+            reasons.append(f"{f['n_cols_page']} columns on the page = {f['n_panels']} side-by-side "
+                           f"panels, at most {f['n_cols']} per panel (primary-like)")
+        else:
+            reasons.append(f"{f['n_cols']} columns (primary-like)")
 
         prelim[pg] = _verdict(f"PRIMARY:{fam}", 0.8, reasons, complete_fams, f,
                               family=fam)
@@ -234,6 +272,9 @@ def classify(data, cfg):
 
     # ---- Layer 3b: positional safety-net (sequence-based recovery) ----- #
     _positional_safety_net(prelim, pages, hits, cfg)
+
+    # ---- Layer 3c: second page of a multi-page INCOME / CASH_FLOW ------ #
+    _multi_page_continuation(prelim, pages, hits)
 
     # ---- Layer 4: validator (identity) -------------------------------- #
     for pg, v in prelim.items():
@@ -315,7 +356,17 @@ def _disambiguate_repeats(prelim, pages):
 
         for pg in pgs[1:]:
             cols = prelim[pg]["n_cols"]
-            if cols != first_cols:
+            if cols != first_cols and cols % 2:
+                # An Individual/Consolidado copy prints whole (N, N-1) column PAIRS (2 or 4). An
+                # odd count is a reconciliation table — «Originalmente apresentado | Ajustes |
+                # Reapresentado» of a restatement note (Dom Atacarejo p14, audit 2026-11-04: its
+                # 32 rows reached the Excel and doubled the debt / interest fields).
+                prelim[pg]["page_class"] = f"NOTE_segment:{fam}"
+                prelim[pg]["reasons"].append(
+                    f"repeat of {fam} with an odd column count ({cols} vs {first_cols}): not "
+                    f"whole (N, N-1) pairs -> reconciliation note, demoted")
+                prelim[pg]["confidence"] = 0.65
+            elif cols != first_cols:
                 # different column layout -> likely separate Individual/Consolidado view
                 prelim[pg]["reasons"].append(
                     f"repeat of {fam} with different column count "
@@ -329,6 +380,23 @@ def _disambiguate_repeats(prelim, pages):
                 prelim[pg]["confidence"] = 0.65
 
 
+def _block_end(prelim):
+    """Last page of the primary block IN CANONICAL ORDER (Balance -> Income -> Cash-Flow). A
+    primary page of an EARLIER family printed after a later family's page is out of sequence —
+    a note carrying a complete balance (Delfia p11, note 1.2: the balance of an absorbed
+    subsidiary, after the DRE p6) — and must not push the safety-net window past the missing
+    statement (the DFC p9 was searched for on pages 12-15 only, audit 2026-11-04)."""
+    rank = {f: i for i, f in enumerate(CANONICAL_ORDER)}
+    seen, end = -1, None
+    for pg in sorted(p for p, v in prelim.items() if v["page_class"].startswith("PRIMARY")):
+        k = rank.get(prelim[pg].get("family"), -1)
+        if k < seen:
+            continue          # out of canonical sequence
+        seen = max(seen, k)
+        end = pg
+    return end
+
+
 def _positional_safety_net(prelim, pages, hits, cfg):
     """
     Layer 3b — sequence-based recovery (SAFETY-NET, not a primary detector).
@@ -340,22 +408,24 @@ def _positional_safety_net(prelim, pages, hits, cfg):
     STRONG-BUT-INCOMPLETE candidate is very likely that missing statement.
 
     Strict guards keep this conservative (no "next page with columns" guessing):
-      * a real block must exist: >= POSITIONAL_MIN_PRIMARY_FAMILIES primary families;
+      * a real block must exist: >= POSITIONAL_MIN_PRIMARY_FAMILIES primary families,
+        or a primary BALANCE (POSITIONAL_ANCHOR_FAMILY) — the canonical block start;
       * the family must not already have a primary page;
       * the candidate must carry PARTIAL anchor evidence (>=1 required anchor) —
         never promoted on column layout alone;
       * it must sit within POSITIONAL_BLOCK_RADIUS pages after the block and have
         a primary-like column count (<= PRIMARY_MAX_COLS);
+      * the window follows the canonical sequence: once a family is promoted, the
+        next family is searched after it (a 2-page DMPL must not push the DFC out);
       * promoted pages are flagged needs_review with low confidence.
     """
     primary_families = {v["family"] for v in prelim.values()
                         if v["page_class"].startswith("PRIMARY") and v.get("family")}
-    if len(primary_families) < POSITIONAL_MIN_PRIMARY_FAMILIES:
+    if (len(primary_families) < POSITIONAL_MIN_PRIMARY_FAMILIES
+            and POSITIONAL_ANCHOR_FAMILY not in primary_families):
         return  # no trustworthy block -> do not infer anything
 
-    primary_pages = [pg for pg, v in prelim.items()
-                     if v["page_class"].startswith("PRIMARY")]
-    block_end = max(primary_pages)
+    block_end = _block_end(prelim)
 
     for fam in CANONICAL_ORDER:
         if fam in primary_families:
@@ -394,6 +464,7 @@ def _positional_safety_net(prelim, pages, hits, cfg):
                 f"({len(partial)}/{len(req_ids)}) within {POSITIONAL_BLOCK_RADIUS}p of "
                 f"primary block (pages<= {block_end}) -> promoted as flagged primary")
             primary_families.add(fam)
+            block_end = max(block_end, pg)   # the next family is searched after this one
             continue
 
         # Second attempt — CONTENT-based, when the family has NO anchor evidence
@@ -430,6 +501,47 @@ def _positional_safety_net(prelim, pages, hits, cfg):
                 f"primary-like columns, within {POSITIONAL_BLOCK_RADIUS}p of primary "
                 f"block (pages<= {block_end}), no anchor evidence -> flagged primary")
             primary_families.add(fam)
+            block_end = max(block_end, pg)
+
+
+def _multi_page_continuation(prelim, pages, hits):
+    """
+    Layer 3c — the second page of an INCOME / CASH_FLOW statement printed over two pages.
+
+    Guards (all required): the primary page lacks the family's CLOSING anchor (net income /
+    financing total), so the statement visibly continues; the next page is a plain NOTE (never
+    a demoted repeat NOTE_segment, never JUNK); >= CONTINUATION_MIN_ROWS and
+    >= CONTINUATION_MIN_SHARE of its line-items belong to the family; same column count; no
+    required anchor of another family (the next statement would start there). Promoted pages
+    are flagged needs_review.
+    """
+    for pg in sorted(p for p in prelim if p is not None):
+        v = prelim[pg]
+        fam = v.get("family")
+        if not v["page_class"].startswith("PRIMARY") or fam not in CLOSING_ANCHOR:
+            continue
+        if CLOSING_ANCHOR[fam] in hits.get(pg, {}).get(fam, []):
+            continue  # the statement closes on this page
+        nxt = pg + 1
+        w = prelim.get(nxt)
+        if w is None or w["page_class"] != "NOTE":
+            continue
+        names = pages[nxt]["names"]
+        own = sum(1 for g, _, _ in names if g in FAMILY_GROUPS[fam])
+        if own < CONTINUATION_MIN_ROWS or own < CONTINUATION_MIN_SHARE * len(names):
+            continue
+        if any(f != fam and ids for f, ids in hits.get(nxt, {}).items()):
+            continue
+        if w["n_cols"] != v["n_cols"]:
+            continue
+        w["page_class"] = f"PRIMARY:{fam}"
+        w["family"] = fam
+        w["confidence"] = round(min(v["confidence"], CONTINUATION_CONFIDENCE), 2)
+        w["needs_review"] = True
+        w["reasons"].append(
+            f"continuation of {fam} from page {pg}: its closing anchor "
+            f"'{CLOSING_ANCHOR[fam]}' is not on page {pg}; {own}/{len(names)} {fam} "
+            f"line-items, same {w['n_cols']}-col layout -> flagged primary")
 
 
 # --------------------------------------------------------------------------- #

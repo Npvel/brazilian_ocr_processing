@@ -1,0 +1,78 @@
+# Ground truth for the Stage 1-4 regression harness (harness/run.py).
+# Built 2026-11-04 from the reciTAL agent Brazil_OCR202606_V4 (doctype 5485): statement pages from the
+# page titles in the OCR words layer, checked against the page images (_recital/<id>/page_<n>.png).
+#
+# statements: pages of the PRIMARY statements (what the business needs in the Excel).
+#   ITR forms carry both perspectives: `consolidated` / `individual` blocks.
+# serasa_zone: [page, y] of the "BALANCOS" header and of the first analysis header after
+#   "DEMONSTRACOES DOS RESULTADOS". Anything outside = Serasa analysis (indices, evolucao,
+#   fluxo de caixa Serasa, indicadores) -> must NOT reach the output (user rule 2026-11-04).
+# golden: cells verified by eye on the page image. `fix` = the work step expected to make it pass:
+#   now (must already pass), stage1, stage2, export, words (recovery from the OCR words layer).
+#   label: normalized substring (anchors_lib.normalize); at: account_type prefix (Contr/Conso) or null.
+
+docs:
+  # p10 = EXACT duplicate of p9 inside the PDF (identical image + words) -> must stay out of the Excel.
+  "2834823": {name: RECONTEC (sample_2), statements: {balance: [7, 8], income: [9], cash_flow: [13]}, duplicate_pages: {10: 9}}
+  "2834911": {name: Raizen (comprehansive_sample), statements: {balance: [20, 21], income: [22], cash_flow: [26]}}
+  "2834920": {name: Solar Comercio, statements: {balance: [1, 2], income: [3], cash_flow: [6]}}
+  "2844779":
+    name: ITR Eztec (itr_samples)
+    statements: {balance: [9, 10, 11], income: [12, 13], cash_flow: [15]}
+    individual: {balance: [1, 2], income: [3], cash_flow: [5]}
+  "2844780":
+    name: ITR Copasa
+    statements: {balance: [12, 13, 14], income: [15, 16], cash_flow: [18, 19]}
+    individual: {balance: [1, 2, 3], income: [4, 5], cash_flow: [7, 8]}
+  "2844931": {name: SERASA FYE (provider_sample), statements: {balance: [4], income: [5]}, serasa_zone: [[4, 0.489], [5, 0.315]]}
+  "2851065": {name: DUTRA (complicated_empty_labels), statements: {balance: [1], income: [2]}}
+  "2851066": {name: Alvorada (complicated_sample_2), statements: {balance: [2], income: [4, 5]}}
+  "2851067": {name: Grupo Moreno, statements: {balance: [5], income: [6], cash_flow: [9]}}
+  "2858162": {name: SERASA (serasa_report_1), statements: {balance: [3], income: [3, 4]}, serasa_zone: [[3, 0.343], [4, 0.119]]}
+  "2858163": {name: SERASA (serasa_report_2), statements: {balance: [3, 4], income: [4]}, serasa_zone: [[3, 0.670], [4, 0.442]]}
+  "2969269": {name: Romagnole, statements: {balance: [6, 7], income: [8], cash_flow: [11]}}
+  "3029461": {name: Documento1 (Solae), statements: {balance: [1], income: [2]}}
+  "3029574": {name: Guabi, statements: {balance: [1], income: [2]}}
+  "3029629": {name: MBP Participacoes, statements: {balance: [9, 10], income: [11], cash_flow: [14]}}
+  "3029702": {name: ALUBAR (DF Brasil Dez25), statements: {balance: [6], income: [7], cash_flow: [10]}}
+  "3029786": {name: SERASA 111320160, statements: {balance: [3], income: [3]}, serasa_zone: [[3, 0.174], [3, 0.813]]}
+  "3029806": {name: SERASA 92644954, statements: {balance: [3], income: [3, 4]}, serasa_zone: [[3, 0.377], [4, 0.172]]}
+  "3029820": {name: SERASA 105563483, statements: {balance: [3], income: [3]}, serasa_zone: [[3, 0.234], [3, 0.761]]}
+  "3029826": {name: Nissan, statements: {balance: [6, 7], income: [8], cash_flow: [11]}}
+  "3029833": {name: SERASA 132321326, statements: {balance: [3, 4], income: [4]}, serasa_zone: [[3, 0.662], [4, 0.431]]}
+  "3029868": {name: 1Q26 Uniao Quimica, statements: {balance: [21, 22], income: [23], cash_flow: [26]}}
+
+golden:
+  # DUTRA p2 (PDF checked): the provider glued each name to the amounts of the line above.
+  - {doc: "2851065", page: 2, label: "mercadorias recebidas em bonificacao", at: null, N: "4.299", N-1: "11.232", fix: stage1}
+  - {doc: "2851065", page: 2, label: "servicos prestados", at: null, N: "249", N-1: "235", fix: stage1}
+  - {doc: "2851065", page: 2, label: "impostos incidentes sobre vendas", at: null, N: "(72.845)", N-1: "(97.358)", fix: stage1}
+  - {doc: "2851065", page: 2, label: "vendas canceladas", at: null, N: "(14.032)", N-1: "(19.386)", fix: stage1}
+  - {doc: "2851065", page: 2, label_exact: "financeiras", at: null, N: "(3.991)", N-1: "(8.844)", fix: stage1}
+  - {doc: "2851065", page: 2, label: "receitas financeiras", at: null, N: "63", N-1: "299", fix: stage1}
+  - {doc: "2851065", page: 2, label: "revenda de mercadorias", at: null, N: "358.964", N-1: "605.913", fix: now}
+  # Raizen p26 cash flow (PDF checked): period tag wrong in the Contr N column, cells lost by the extraction.
+  - {doc: "2834911", page: 26, label: "acrescimo decrescimo de caixa", at: Contr, N: "6.472.675", fix: stage1}
+  - {doc: "2834911", page: 26, label: "acrescimo decrescimo de caixa", at: Conso, N: "6.901.487", N-1: "6.086.510", fix: now}
+  - {doc: "2834911", page: 26, label: "acrescimo decrescimo de caixa", at: Contr, N-1: "(37.897)", fix: words}
+  - {doc: "2834911", page: 26, label: "gerado nas atividades de financiamentos", at: Contr, N: "9.974.302", fix: stage1}
+  - {doc: "2834911", page: 26, label: "gerado nas atividades de financiamentos", at: Contr, N-1: "(6.211.553)", fix: words}
+  - {doc: "2834911", page: 26, label: "desvalorizacao de ativo financeiro", at: Conso, N: "19.587", fix: stage1}
+  - {doc: "2834911", page: 26, label: "aplicacoes em titulos e valores mobiliarios", at: Contr, N: "(339.177)", fix: stage1}
+  - {doc: "2834911", page: 26, label: "aplicacoes em titulos e valores mobiliarios", at: Conso, N: "(172.685)", fix: now}
+  - {doc: "2834911", page: 26, label: "aplicacoes em titulos e valores mobiliarios", at: Conso, N-1: "(886.775)", fix: words}
+  - {doc: "2834911", page: 26, label: "adicoes ao investimento", at: Contr, N: "(1.690.000)", fix: now}
+  - {doc: "2834911", page: 26, label: "adicoes ao investimento", at: Contr, N-1: "(63.100)", fix: words}
+  - {doc: "2834911", page: 26, label: "caixa e equivalentes de caixa no final do exercicio", at: Conso, N: "21.721.393", N-1: "14.819.906", fix: words}
+  # Raizen p22: EBT printed on two lines; the amounts sit on the 2nd line ("da contribuicao social").
+  - {doc: "2834911", page: 22, label: "antes do imposto sobre a renda e da contribuicao social", at: Conso, N: "(3.146.250)", fix: stage1}
+  # RECONTEC p13 cash flow: first line's label not extracted (only in the OCR words).
+  - {doc: "2834823", page: 13, label: "lucro liquido antes do imposto de renda e contribuicao social", at: null, N: "63.964", N-1: "65.095", fix: words}
+  # SERASA serasa2: statement values (C = N, B = N-1).
+  - {doc: "2858163", page: 3, label: "disponivel", at: null, N: "52.947", N-1: "133.165", fix: now}
+  # ALUBAR p10 cash flow: Consolidado lost by the extraction on ~17 lines.
+  - {doc: "3029702", page: 10, label: "contas a receber", at: Conso, N: "177.180", N-1: "127.119", fix: words}
+  # Documento1 (Solae, US-style "57,450"): figures rewritten in Brazilian notation (step 3), Excel x1000 fixed.
+  - {doc: "3029461", page: 1, label: "caixa e equivalentes de caixa", at: null, N: "57.450", N-1: "56.676", fix: now, excel: balance}
+  # Nissan p8: the whole income statement is missing from the Excel today (Stage 2).
+  - {doc: "3029826", page: 8, label: "receita operacional liquida", at: null, N: "8.225.713", N-1: "7.793.217", fix: now, excel: income, excel_fix: stage2}

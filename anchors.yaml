@@ -87,11 +87,22 @@ statements:
     required_anchors:
       - id: receita_liquida
         canon: "Receita operacional líquida"
-        aliases: ["Receita líquida", "Receita líquida de vendas"]
+        # "Receita" alone heads the DRE of some combined/condensed filings (Grupo Moreno).
+        aliases: ["Receita líquida", "Receita líquida de vendas", "Receita"]
       - id: lucro_liquido_exercicio
         canon: "Lucro líquido do exercício"
+        # Exact forms seen in the reciTAL corpus (2026-11): no "líquido" (Nissan), quarterly
+        # "do período" (1Q26, Moreno). Listed verbatim: the fuzzy backstop rejects a short canon
+        # once a benign word (prejuízo) is inserted, so the inflected forms must be explicit.
         aliases: ["Lucro líquido (prejuízo) do exercício",
-                  "Lucro líquido / prejuízo do exercício"]
+                  "Lucro líquido / prejuízo do exercício",
+                  "Lucro (prejuízo) do exercício",
+                  "Lucro do exercício",
+                  "Lucro líquido do período",
+                  "Lucro (prejuízo) líquido do período",
+                  "Lucro/Prejuízo líquido do período",
+                  "Lucro do período",
+                  "Lucro (prejuízo) do período"]
     optional_anchors:
       - id: lucro_bruto
         canon: "Lucro bruto"
@@ -119,19 +130,31 @@ statements:
                   "Caixa líquido gerado nas atividades operacionais",
                   "Caixa líquido gerado pelas atividades operacionais",
                   "Caixa líquido aplicado nas atividades operacionais",
-                  "Caixa líquido utilizado nas atividades operacionais"]
+                  "Caixa líquido utilizado nas atividades operacionais",
+                  "Caixa líquido consumido pelas atividades operacionais",   # Nissan
+                  # audit 2026-11-04 (verbatim: several benign words push the fuzzy backstop under
+                  # the threshold): Delfia p9, São Salvador p25
+                  "Fluxo de caixa líquido gerado nas atividades operacionais",
+                  "Fluxo de caixa líquido proveniente das (utilizado nas) atividades operacionais"]
       - id: cf_investimento
         canon: "Caixa líquido das atividades de investimentos"
         aliases: ["Caixa líquido (utilizado) gerado nas atividades de investimentos",
                   "Caixa líquido aplicado nas atividades de investimento",
                   "Caixa líquido gerado pelas atividades de investimento",
-                  "Caixa líquido das atividades de investimento"]
+                  "Caixa líquido das atividades de investimento",
+                  "Caixa líquido aplicado nas atividades de investimentos",  # Nissan, Moreno (plural)
+                  "Caixa líquido utilizado nas atividades de investimento",  # Entrepay p9 (audit 2026-11-04)
+                  "Fluxo de caixa líquido proveniente das (utilizado nas) atividades de investimento"]  # São Salvador p25
       - id: cf_financiamento
         canon: "Caixa líquido das atividades de financiamentos"
         aliases: ["Caixa líquido (utilizado) gerado nas atividades de financiamentos",
                   "Caixa líquido aplicado nas atividades de financiamento",
                   "Caixa líquido gerado pelas atividades de financiamento",
-                  "Caixa líquido das atividades de financiamento"]
+                  "Caixa líquido das atividades de financiamento",
+                  "Caixa líquido aplicado nas atividades de financiamentos",          # Moreno (plural)
+                  "Fluxo de caixa líquido aplicado em atividades de financiamentos",  # Nissan
+                  "Caixa líquido proveniente das atividades de financiamento",        # Entrepay p9 (audit 2026-11-04)
+                  "Fluxo de caixa líquido proveniente das (utilizado nas) atividades de financiamento"]  # São Salvador p25
     optional_anchors:
       - id: caixa_inicio
         canon: "Caixa e equivalentes de caixa no início do exercício"

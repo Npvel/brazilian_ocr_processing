@@ -71,8 +71,8 @@ than re-implementing them:
 
 | Decision | Function reused (from `export_excel`) |
 |---|---|
-| Which rows appear | `row_passes()` + `is_small_span()` (page-class / small-span override) |
-| Which amounts appear | `pick_amounts()` (period-mapped, doc-type-aware Consolidado filter) |
+| Which rows appear | `selection.passing_rows()` (via `export_excel`): duplicates / Serasa analysis / header lines / DRA-DMPL-DVA out, ITR form pages only, page-class with small-span override, document-level Consolidado rule |
+| Which amounts appear | `pick_amounts()` (period-mapped, doc-type-aware Consolidado filter; `AMOUNT_N-2` never) |
 | Section titles | `SECTION_TITLES` |
 | Metadata field labels | `META_PRETTY` |
 | Total-row detection | `_looks_like_total()` |
@@ -80,12 +80,21 @@ than re-implementing them:
 | Doc-type resolution | `resolve_doc_type()` |
 | **The .xlsx download** | **`build_workbook()`** — the exact function the CLI calls |
 
-`app.passing_rows()` is the one place the screen selects rows, and it is a thin wrapper over
-`row_passes` / `pick_amounts`. Because the download calls `build_workbook` directly, the file is
+`app.passing_rows()` is the one place the screen selects rows, and it delegates to
+`export_excel.passing_rows` (2026-11) — the same function the sheets use, which applies the page filter,
+the Serasa analysis cut and the document-level "Consolidado, else company" rule. Because the download calls `build_workbook` directly, the file is
 **content-identical** to `python3.13 export_excel.py …` (verified — see [§11](#11-verification)).
 
-> **Implication for maintainers.** To change *what data* is shown or exported, edit `export_excel.py`
-> (or the stages upstream). `app.py` only governs *presentation*. This keeps the CLI and the UI in lock-step.
+> **Implication for maintainers.** To change *what data* is shown or exported, edit `selection.py` /
+> `export_excel.py` (or the stages upstream). `app.py` only governs *presentation*. This keeps the CLI and
+> the UI in lock-step.
+>
+> **Presentation differences (2026-11-04).** The workbook tags per-share lines «(per share)» and writes the
+> period dates into the amount headers (`export_excel.period_labels`); the screen shows decimals (EPS,
+> centavos) through `fmt_amount` but neither the marker nor the dates yet. The figures and rows are
+> identical. **Since 2026-11-05 the review marking is shared:** a row flagged `needs_review` is light red on
+> the screen as in the workbook, with the same reason in words in the «Review · Revisão» column
+> (`export_excel.review_reason` = `selection.review_reason`).
 
 ---
 
@@ -99,6 +108,12 @@ The uploader accepts either end of the pipeline and detects which by the JSON ro
 | Root is a **`list`** | Raw OCR provider dump | Runs `structure_ocr.process()` → Stages 1-3, then renders |
 | Root is a **`dict`** with a `statements` key | A structured output | Used as-is (no re-processing) |
 | Anything else | — | Friendly error explaining the two accepted shapes |
+
+**Optional second upload — OCR words layer.** Below the main uploader, *OCR words layer (optional)*
+accepts the reciTAL words layer (`GET /files/{id}/words/`). With it, a raw upload runs
+`structure_ocr.process(data, words=...)`: figures / lines / labels the extraction lost are recovered
+(`docs/Words_Recovery.md`). Without it the app behaves exactly as before — production may not have the
+words layer.
 
 This mirrors the input-shape fact from `CLAUDE.md` (the raw OCR root is a **list of 11**, not a dict).
 A raw upload also offers a **Download structured JSON** button so the reviewer can keep the Stage-1-3
@@ -150,14 +165,26 @@ Each row is classed for at-a-glance reading:
 | **sbs** | gold **●** dot + blue field name, faint gold tint | carries an `sbs_label` |
 | **total** | bold, light-blue fill | a `Total…` / `(=)` line (`_looks_like_total`) |
 | **derived** | italic, amber fill | a Stage-3 synthesized row (e.g. derived `totalLiabilitiesAmount`) |
+| **review** | light red fill (`#FDECEA`), the reason in the «Review · Revisão» column | `needs_review = true` (since 2026-11-05, same as the workbook) |
 
-Inline badges next to the SBS field name surface Stage-3 flags without a separate column:
+Inline badges next to the SBS field name surface the flags at a glance:
 
 | Badge | Trigger | Tooltip |
 |---|---|---|
-| **REVIEW** | `needs_review = true` | shows `sbs_review_reason` |
+| **REVIEW** | `needs_review = true` | the reason in words (`export_excel.review_reason`: failing equation, two panels on one line, two figures for one column, SBS field chosen / not resolved, withdrawn label, `sbs_review_reason`) |
 | **CROSS** | `sbs_scope = cross_scope` | match recovered outside its home statement |
 | **DERIVED Σ** | `sbs_derived = true` | computed value, no source page |
+
+Items recovered from the OCR words layer are marked like in the workbook: the figure *italic dark gold
+on light yellow* (tooltip "recovered from the OCR words layer"; the cell actually written is found with
+`export_excel.pick_cells`), a recovered label the same plus a **WORDS** badge.
+
+A fourth tab **SBS fields · Campos SBS** shows the workbook's `sbs_fields` sheet: one value per SBS field
+and period, how it was obtained (badge **✓ IDENTITY** when an accounting identity proves it, **REVIEW**
+when it could not be decided), the rows used, and the accounting checks.
+
+The metadata ribbon shows the same text as the workbook's metadata sheet (`export_excel.meta_display`:
+normalized closing date / currency / unit, OCR token alongside).
 
 The **Code** column appears only when codes exist in that tab (ITR), so 2-col/uppercase views aren't
 cluttered with an empty column. Negative amounts render in parentheses and red.
@@ -179,16 +206,27 @@ The palette mirrors `export_excel.py` so the screen and workbook are one brand:
 
 ---
 
-## 9. Performance — Caching
+## 9. Performance — per-session memo (no app-wide cache)
 
-Two `@st.cache_data` layers keep the UI responsive when toggles trigger a Streamlit rerun:
+Every toggle triggers a Streamlit rerun, so the pipeline result and the workbook are memoized — but
+**per browser session**, in `st.session_state` (`_session_memo`), keyed by a SHA-256 of the uploaded
+bytes (raw JSON + optional words file) and of the output:
 
-- **`load_and_process(file_bytes, filename)`** — parsing + Stages 1-3, keyed on the uploaded bytes.
-  A 3.4 MB raw file is processed **once**, not on every expand/collapse click.
-- **`build_excel_bytes(_output, cache_key)`** — the workbook build, keyed on filename+size (the
-  `_output` arg is excluded from the key by the leading underscore, per Streamlit's hashing rules).
+- **`load_and_process(file_bytes, filename, words_bytes)`** — parsing + Stages 1-3, once per session
+  and document; toggles are instant.
+- **`build_excel_bytes(output)`** — the workbook, built in memory (`BytesIO`, never written to disk).
 
-Without these, every section toggle would re-run the whole pipeline. With them, toggles are instant.
+Why not `@st.cache_data` (used until 2026-11-04): that cache is **app-wide** — on a deployed app it is
+shared by every user and kept in the server's memory until the app restarts — and the old workbook key
+(file name + JSON length) could, in theory, hand one user the Excel of another user's different file
+with the same name and length. The session store holds only the current document and disappears with
+the session.
+
+> **Where the processing runs.** Locally (`streamlit run app.py`) everything happens on the laptop. On a
+> hosted deployment (e.g. Streamlit Community Cloud) the Python back-end runs on the HOST's servers: the
+> uploaded JSON travels there (HTTPS), is processed in memory, and the Excel travels back. Nothing is
+> written to disk by the app, but the data does leave the laptop — check the host is approved for this
+> data (see §12).
 
 ---
 
@@ -250,6 +288,16 @@ Done at build time (2026-06-30):
 - **Open — possible additions** (discussed, not yet built): row search/filter, a dedicated metadata
   tab, an Allianz logo image in the hero, per-row review-resolution controls.
 - **Not wired to Jira/Outlook.** Standalone local tool; no network calls beyond Streamlit itself.
+- **Open — hosting of the Brazilian user acceptance (UAT).** The app is deployed on Streamlit Community
+  Cloud from the GitHub repo `Npvel/brazilian_ocr_processing`, which is PUBLIC (checked 2026-11-04). There
+  the back-end runs on the host's servers, so the uploaded JSON (company financials, Serasa reports) is
+  processed outside the laptop — in memory, not stored by the app, but on third-party infrastructure.
+  To decide with Allianz InfoSec / Data Protection: (a) keep Community Cloud with a private repo and
+  the app shared only with invited viewers; (b) host it inside the Allianz perimeter (internal server /
+  Allianz cloud tenant / Streamlit in Snowflake if available); (c) run the app IN THE BROWSER (stlite /
+  Pyodide: the Python code, incl. the pipeline, executes on the user's laptop, the host only serves
+  static files — the data never leaves the laptop). The repo docs also quote company names and figures
+  of the sample documents.
 
 ---
 

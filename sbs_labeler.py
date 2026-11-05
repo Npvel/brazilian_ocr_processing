@@ -120,8 +120,8 @@ def sbs_normalize(s):
 # Current / non-current ambiguity
 # --------------------------------------------------------------------------- #
 # Some captions are shared by a current/non-current TWIN PAIR of SBS fields:
-#   * debt       — financialLiabilitiesShortTerm vs ...LongTerm
-#                  ("emprestimos e financiamentos")
+#   * debt       — shortTermLiabilitiesAmount vs longTermLiabilitiesAmount = short- / long-term
+#                  CREDITS AND LOANS (user mapping 2026-11-04; "emprestimos e financiamentos")
 #   * securities — cashAndSecuritiesAmount (current) vs financialAssetsAmount
 #                  (non-current) ("titulos e valores mobiliarios",
 #                  "aplicacoes financeiras", "investimentos")
@@ -275,6 +275,7 @@ def load_mapping(path=MAPPING_PATH):
             "allowed_statements": spec.get("allowed_statements") or [],
             "home_section": spec.get("home_section"),
             "category": spec.get("category"),
+            "strict_scope": bool(spec.get("strict_scope")),
         }
     mapping["_field_config"] = fc
 
@@ -383,12 +384,15 @@ def _resolve_twin(group, label_qualifier, code, positional_section):
 # arithmetically equals the sum of its section's detail rows is that subtotal.
 # The liabilities side has THREE blocks (current / non-current / equity), not two
 # — a nameless equity subtotal (Total do Patrimônio Líquido) must map to
-# shareholdersFundsAmount, never to longTermLiabilitiesAmount.
+# shareholdersFundsAmount, never to the non-current total (financialLiabilitiesLongTerm).
+# USER MAPPING 2026-11-04: the liabilities SECTION TOTALS are financialLiabilitiesShortTerm /
+# financialLiabilitiesLongTerm; shortTermLiabilitiesAmount / longTermLiabilitiesAmount are the
+# credits and loans (a detail line, resolved by the debt twin group).
 _SECTION_TOTAL_FIELD = {
     ("BALANCE_ASSETS_LST", "current"): "totalCurrentAssetsAmount",
     ("BALANCE_ASSETS_LST", "noncurrent"): "totalFixedAssetsAmount",
-    ("BALANCE_LIABILITIES_LST", "current"): "shortTermLiabilitiesAmount",
-    ("BALANCE_LIABILITIES_LST", "noncurrent"): "longTermLiabilitiesAmount",
+    ("BALANCE_LIABILITIES_LST", "current"): "financialLiabilitiesShortTerm",
+    ("BALANCE_LIABILITIES_LST", "noncurrent"): "financialLiabilitiesLongTerm",
     ("BALANCE_LIABILITIES_LST", "equity"): "shareholdersFundsAmount",
 }
 
@@ -427,7 +431,7 @@ def _is_small_span(rows):
     return len(pages) == 2 and pages[1] == pages[0] + 1
 
 
-def _resolve_empty_label(rows, idx, scope, sections):
+def _resolve_empty_label(rows, idx, scope, sections, tree=None):
     """
     Try to assign an SBS field to a label_null row (a subtotal whose name the OCR
     dropped) — balance scopes only, conservative. Returns (field|None, method,
@@ -439,23 +443,121 @@ def _resolve_empty_label(rows, idx, scope, sections):
     short/longTerm field. A value equal to an adjacent row (OCR duplicate/shift)
     is explicitly NOT assigned.
     """
-    field_for = _SECTION_TOTAL_FIELD
     if scope not in {"BALANCE_ASSETS_LST", "BALANCE_LIABILITIES_LST"}:
         return None, None, None
+    # The sum runs inside ONE account perspective (Controladora and Consolidado figures are
+    # never added together): the page's perspective first (consolidated if presented), then
+    # any other the row carries. Taking "the first AMOUNT_N cell" of each row mixed them as
+    # soon as a row's Controladora cell was empty (a dash) and another's was not.
+    page_rows = [r for r in rows if r.get("page_nb") == rows[idx].get("page_nb")]
+    order = [_perspective(page_rows)] + [_at_key(c) for c in rows[idx].get("columns", [])
+                                         if c.get("period") == "AMOUNT_N"]
+    results = [_resolve_empty_label_in(rows, idx, scope, sections, at, tree) for at in dict.fromkeys(order)]
+    return next((res for res in results if res[0] is not None), results[0])
+
+
+# Subtotal tree of a balance page. A balance nests: details -> block subtotal (e.g. «Realizável a
+# longo prazo») -> SECTION total (current / non-current / equity) -> grand total. Only a section
+# total is an SBS field; an intermediate block subtotal equals the running sum of its own details
+# just as well, so the running-sum test alone cannot tell them apart (Raízen p20: the long-term
+# receivables subtotal 22.881.939 took totalFixedAssetsAmount next to the printed «Total do ativo
+# não circulante» 79.879.300; 1Q26 p21: two block subtotals of the non-current assets). The tree
+# can: a subtotal consumed by a section-level subtotal is intermediate.
+_TREE_TOL_ABS = 2.0          # thousands rounding of printed statements
+_TREE_TOL_REL = 0.0002
+
+
+def _subtotal_tree(rows):
+    """Stack parse of every page of a balance bucket in print order, inside the page's account
+    perspective: a row equal to the sum of the last k>=2 open items (details or subtotals already
+    closed) closes them. A subtotal that closes EVERYTHING still open on the page and has a
+    subtotal among its children is the page's GRAND total (total assets / total liabilities +
+    equity): it sums the section totals, it is not one of them (Guabi p1: unnamed 391.259 =
+    231.003 + 160.256). Returns {"parent", "children", "grand", "at": {page: at}}."""
+    parent, children, persp, grand = {}, {}, {}, set()
+    pages = defaultdict(list)
+    for i, r in enumerate(rows):
+        pages[r.get("page_nb")].append(i)
+    for pg, idxs in pages.items():
+        at = persp[pg] = _perspective([rows[i] for i in idxs])
+        stack = []
+        for i in idxs:
+            v = _amount_n(rows[i], at)
+            if v is None:
+                continue
+            s, best = 0.0, None
+            for k in range(1, len(stack) + 1):
+                s += stack[-k][0]
+                if k >= 2 and v != 0 and abs(v - s) <= max(_TREE_TOL_ABS, _TREE_TOL_REL * abs(v)):
+                    best = k
+            if (best is None and stack and not rows[i].get("label") and v != 0
+                    and stack[-1][1] not in children and rows[stack[-1][1]].get("label")
+                    and abs(v - stack[-1][0]) <= _TREE_TOL_ABS):
+                # an UNNAMED row repeating the named line just above = the subtotal of a one-line
+                # block (DUTRA p1: «Imobilizado» 7.179 / unnamed 7.179 = «Permanente»; total assets
+                # 198.132 = 167.392 + 23.561 + 7.179). As a 1-child node it keeps every sum intact.
+                best = 1
+            if best:
+                kids = [stack[-k][1] for k in range(best, 0, -1)]
+                del stack[-best:]
+                for kd in kids:
+                    parent[kd] = i
+                children[i] = kids
+                if not stack and any(kd in children for kd in kids):
+                    grand.add(i)
+            stack.append((v, i))
+    return {"parent": parent, "children": children, "grand": grand, "at": persp}
+
+
+_SECTION_TOTAL_FIELDS = set(_SECTION_TOTAL_FIELD.values())
+
+
+def _is_intermediate(rows, idx, tree):
+    """An unnamed subtotal consumed by a SECTION-level subtotal (one that is itself consumed by a
+    higher total, or a printed section total) is an intermediate block subtotal, not an SBS field.
+    Except under a printed «Total do passivo» (liabilities only): that line groups the SECTION
+    totals (current + non-current liabilities) and is itself summed with the equity total into the
+    grand total — its children are the section totals, not blocks (DIMENSIONAL p1, audit 2026-11-04:
+    the unnamed 214.180 / 50.606 were taken for block subtotals, so neither section total nor the
+    total liabilities got a field and the balance identity never ran)."""
+    p = tree["parent"].get(idx)
+    if p is None:
+        return None
+    if normalize(rows[p].get("label") or "") in _TOTAL_LIAB_CAPS:
+        return None
+    if p in tree["parent"] or rows[p].get("sbs_label") in _SECTION_TOTAL_FIELDS:
+        return p
+    return None
+
+
+def _leaf_labels(rows, idx, tree):
+    out = []
+    for k in tree["children"].get(idx, []):
+        if k in tree["children"]:
+            out += _leaf_labels(rows, k, tree)
+        elif rows[k].get("label"):
+            out.append(normalize(rows[k]["label"]))
+    return out
+
+
+def _resolve_empty_label_in(rows, idx, scope, sections, at, tree=None):
+    """_resolve_empty_label within one account perspective `at` (an _at_key)."""
+    field_for = _SECTION_TOTAL_FIELD
 
     def amt_n(r):
-        for c in r.get("columns", []):
-            if c.get("period") == "AMOUNT_N":
-                return parse_amount(c.get("value"))
-        return None
+        return _amount_n(r, at)
 
     target = amt_n(rows[idx])
     if target is None:
         return None, "empty_label_unresolved", "no AMOUNT_N value"
 
-    # OCR duplicate/shift guard: identical to an immediate neighbour's value.
+    # OCR duplicate/shift guard: identical to an immediate neighbour's value — unless the subtotal
+    # tree proves it is the subtotal of a one-line block summed by the page's grand total.
+    tr = tree or {}
+    block_of_grand = (tr.get("children", {}).get(idx) == [idx - 1]
+                      and tr.get("parent", {}).get(idx) in tr.get("grand", set()))
     for j in (idx - 1, idx + 1):
-        if 0 <= j < len(rows) and rows[j].get("label"):
+        if 0 <= j < len(rows) and rows[j].get("label") and not block_of_grand:
             if amt_n(rows[j]) == target:
                 return (None, "empty_label_unresolved",
                         f"value {target:g} duplicates neighbour — likely OCR shift")
@@ -476,12 +578,21 @@ def _resolve_empty_label(rows, idx, scope, sections):
         if v is not None:
             run.append(v)
             run_labels.append(normalize(rj.get("label") or ""))
-    if not run:
-        return (None, "empty_label_unresolved",
-                "no preceding detail rows to sum")
     s = sum(run)
     tol = max(2.0, 0.01 * abs(target))
-    if abs(s - target) > tol:
+    kids = (tree or {}).get("children", {}).get(idx)
+    if run and abs(s - target) <= tol:
+        pass
+    elif kids and tree["at"].get(rows[idx].get("page_nb")) == at:
+        # a section total printed after block subtotals (1Q26 p21: non-current = long-term
+        # receivables subtotal + fixed-assets subtotal): the tree proves the sum
+        run = [_amount_n(rows[k], at) for k in kids]
+        run_labels = _leaf_labels(rows, idx, tree)
+        s = sum(run)
+    elif not run:
+        return (None, "empty_label_unresolved",
+                "no preceding detail rows to sum")
+    else:
         return (None, "empty_label_unresolved",
                 f"value {target:g} != sum of preceding items ({s:g})")
 
@@ -528,12 +639,40 @@ def _resolve_empty_label(rows, idx, scope, sections):
             f"subtotal of section {chosen!r} has no SBS total field")
 
 
-def _amount_n(row):
-    """AMOUNT_N value of a row as a float, or None."""
+def _at_key(c):
+    """Account perspective of a cell: 'consolidado' / 'controladora' / raw lower-cased / ''."""
+    a = (c.get("account_type") or "").lower()
+    if a.startswith("consolidad"):
+        return "consolidado"
+    if a.startswith("controlad") or a.startswith("individ"):
+        return "controladora"
+    return a
+
+
+def _perspective(rows):
+    """The ONE account perspective balance arithmetic runs in for these rows: consolidated if
+    presented (user rule 2026-11-04), else the most frequent among their AMOUNT_N cells."""
+    cnt = Counter(_at_key(c) for r in rows for c in r.get("columns", []) if c.get("period") == "AMOUNT_N")
+    if not cnt:
+        return ""
+    return "consolidado" if "consolidado" in cnt else cnt.most_common(1)[0][0]
+
+
+def _amount_n(row, at=None):
+    """AMOUNT_N value of a row as a float, or None. `at` (an _at_key) restricts it to one
+    account perspective — Controladora and Consolidado figures must never be summed together."""
     for c in row.get("columns", []):
-        if c.get("period") == "AMOUNT_N":
-            return parse_amount(c.get("value"))
+        if c.get("period") == "AMOUNT_N" and (at is None or _at_key(c) == at):
+            v = parse_amount(c.get("value"))
+            if v is not None:
+                return v
     return None
+
+
+def _has_dash(row):
+    """A figure line printed with a dash («-»: Stage 1 sign_proof turns a dash the OCR read as «1» into
+    one) — not a header line without figures."""
+    return any(str(c.get("value") or "").strip() in ("-", "–", "—") for c in row.get("columns", []))
 
 
 def _fill_sections_by_arithmetic(rows, idxs, scope, sect):
@@ -549,14 +688,17 @@ def _fill_sections_by_arithmetic(rows, idxs, scope, sect):
     only fills `None` gaps, so working docs (ITR, annual DFP) are untouched.
     Mutates `sect` in place for the given page's `idxs`.
     """
-    vals = [_amount_n(rows[i]) for i in idxs]
+    at = _perspective([rows[i] for i in idxs])        # one perspective, never Contr + Conso
+    vals = [_amount_n(rows[i], at) for i in idxs]
     norms = [normalize(rows[i].get("label") or "") for i in idxs]
     run, run_pos, nonequity = [], [], 0
+    last = None          # (value, section) of the block closed last
     for pos, i in enumerate(idxs):
         v = vals[pos]
         if v is None:
-            run, run_pos = [], []
-            continue
+            if _amount_n(rows[i]) is None and not _has_dash(rows[i]):
+                run, run_pos = [], []      # a line without figures (header) ends the block
+            continue                       # a dash (in this perspective or any): contributes 0
         s = sum(run)
         if run and abs(s - v) <= max(2.0, 0.01 * abs(v)):
             # this row closes a block: classify it + its feeding detail rows
@@ -571,6 +713,16 @@ def _fill_sections_by_arithmetic(rows, idxs, scope, sect):
                 if sect[idxs[p]] is None:        # gap-fill only — never override
                     sect[idxs[p]] = block
             run, run_pos = [], []
+            last = (v, block)
+        elif run and last and abs(s + last[0] - v) <= max(2.0, 0.01 * abs(v)):
+            # a section total printed AFTER a block subtotal of its own section closes that block +
+            # the lines since it (Serasa GRANJA FARIA p3: ATIVO NAO CIRCULANTE 1.419.078 = REALIZAVEL
+            # L PRAZO 62.634 + TOT INVESTIMENTOS + IMOBILIZADO + INTANGIVEL — audit 2026-11-04, S1)
+            for p in run_pos + [pos]:
+                if sect[idxs[p]] is None:
+                    sect[idxs[p]] = last[1]
+            run, run_pos = [], []
+            last = (v, last[1])
         else:
             run.append(v)
             run_pos.append(pos)
@@ -615,7 +767,35 @@ def _is_serasa_shape(rows, scope, document_type):
         return False
     if _has_total_do_markers(rows, scope):
         return False
+    if _is_total_first(rows):
+        return False
     return True
+
+
+def _is_total_first(rows):
+    """True for an accounting-system «balancete» dump that prints every group total ABOVE its lines
+    (Benoit / Uniar, audit 2026-11-04): on every balance page the first line with figures is the
+    side's grand total (ATIVO / PASSIVO = the page's largest figure). There the section HEADERS lead
+    (CIRCULANTE / PASSIVO NÃO CIRCULANTE carry their totals and open their block), so the page-local
+    marker passes apply; the SERASA-shape arithmetic (a block CLOSED by its running-sum subtotal)
+    finds no block at all and left every section empty (Benoit: a non-current «FORNECEDORES» summed
+    into trade creditors)."""
+    pages = defaultdict(list)
+    for r in rows:
+        v = _amount_n(r)
+        if v is not None:
+            pages[r.get("page_nb")].append(abs(v))
+    return bool(pages) and all(len(v) >= 3 and v[0] >= max(v) for v in pages.values())
+
+
+_CODE_SECTION = {"1.01": "current", "1.02": "noncurrent", "2.01": "current", "2.02": "noncurrent",
+                 "2.03": "equity"}
+
+
+def _code_section(code):
+    """Balance section from a CVM account code ('2.01.04.01' -> current), or None."""
+    seg = str(code or "").split(".")
+    return _CODE_SECTION.get(".".join(seg[:2])) if len(seg) >= 2 else None
 
 
 def _compute_sections(rows, scope, serasa_shape=False):
@@ -648,6 +828,12 @@ def _compute_sections(rows, scope, serasa_shape=False):
     sect = [None] * n
     if not markers:
         return sect
+    # CVM codes ARE the section (x.01 current, x.02 non-current, 2.03 equity — the twin stage already
+    # trusts them): authoritative where present, the marker / arithmetic passes fill the rest. Without
+    # it a header-led ITR page lost its sections wherever the marker wording differs (audit
+    # 2026-11-04, P6: Unipar trade creditors).
+    for i, r in enumerate(rows):
+        sect[i] = _code_section(r.get("code"))
 
     # SERASA/provider shape: bucket-wide arithmetic is the AUTHORITATIVE (not
     # gap-fill) section source. Blocks close at their running-sum subtotal,
@@ -670,7 +856,7 @@ def _compute_sections(rows, scope, serasa_shape=False):
         page_spans[pages[i]].append(i)
 
     for _, idxs in page_spans.items():
-        # forward: headers lead
+        # forward: headers lead (never over a code-given section)
         cur = None
         for i in idxs:
             nm = norms[i]
@@ -678,7 +864,8 @@ def _compute_sections(rows, scope, serasa_shape=False):
                 cur = "current"
             elif nm in h_non:
                 cur = "noncurrent"
-            sect[i] = cur
+            if sect[i] is None:
+                sect[i] = cur
         # backward: subtotals close (fill gaps the forward pass left None)
         cur = None
         for i in reversed(idxs):
@@ -714,10 +901,17 @@ def _compute_sections(rows, scope, serasa_shape=False):
 _BALANCE_SCOPES = {"BALANCE_ASSETS_LST", "BALANCE_LIABILITIES_LST"}
 
 
+def _amount_token(value):
+    """A figure as compared by the dedup: the PARSED number when it parses ('-13.534.197' and
+    '(13.534.197)' are one figure — WEG p14 / p48, audit 2026-11-04), else the token as printed."""
+    v = parse_amount(value)
+    return repr(v) if v is not None else (value or "")       # exact: EPS 0,66015 != 0,65999
+
+
 def _row_amounts_key(row):
     """(account_type, period, value) signature of a row's columns — dedup key."""
     return tuple(sorted(
-        (c.get("account_type") or "", c.get("period") or "", c.get("value") or "")
+        (c.get("account_type") or "", c.get("period") or "", _amount_token(c.get("value")))
         for c in row.get("columns", [])))
 
 
@@ -821,6 +1015,130 @@ def _stage_match(rows, stmt_name, mapping, match_cfg, stats):
     return stats
 
 
+_TAX_COMPONENTS = {"corrente", "correntes", "diferido", "diferidos", "corrente e diferido",
+                   "correntes e diferidos"}
+# Words of an income-tax line. Between the pre-tax and the post-tax line a DRE prints only the tax
+# and, sometimes, profit sharing / minority interests (no tax word): a line carrying one of these is
+# a tax line whatever its wording — «Despesa de imposto de renda e contribuição social correntes»
+# (DIMENSIONAL p2), «(-) DESPESA COM IMPOSTOS» + «-PROVISÃO P/ IR» / «-PROVISÃO P/ CS» (Benoit p4),
+# bare «Correntes» / «Diferidos» (São Salvador p22, Raízen p22, 1Q26 p23) — audit 2026-11-04.
+_TAX_WORDS = {"imposto", "impostos", "ir", "irpj", "cs", "csll", "cssl", "contribuicao", "tributos",
+              "tributo", "corrente", "correntes", "diferido", "diferidos"}
+
+
+def _stage_tax_components(rows, stmt_name, stats):
+    """Income tax printed as a header + component lines. Between the pre-tax line and the next
+    post-tax line (same page), every line WITH figures whose caption carries a tax word (and no
+    «antes») is an income-tax line, and an unnamed line equal to the sum of the tax lines just above
+    is their printed total. A total printed ABOVE its components is one of the tax lines itself;
+    sbs_fields then counts the printed total, not total + components (hierarchy). Positional and
+    arithmetic — the words alone match nothing (the pre-tax caption is token-identical to the tax
+    alias, see _is_pretax_label)."""
+    if stmt_name != "INCOME_STATEMENT_LST":
+        return stats
+    at = _perspective(rows)
+    for i, r in enumerate(rows):
+        if r.get("sbs_label") != "pretaxProfitAmount":
+            continue
+        comps = []
+        for j in range(i + 1, len(rows)):
+            rj = rows[j]
+            if rj.get("page_nb") != r.get("page_nb") or rj.get("sbs_label") == "posttaxProfitAmount":
+                break
+            if not rj.get("columns"):
+                continue
+            lab = normalize(rj.get("label") or "")
+            toks = set(lab.split())
+            if rj.get("label") and toks & _TAX_WORDS and "antes" not in toks                     and rj.get("sbs_label") in (None, _INCOME_TAX_FIELD):
+                if not rj.get("sbs_label"):
+                    rj["sbs_label"] = _INCOME_TAX_FIELD
+                    rj["sbs_scope"] = "in_scope"
+                    rj["sbs_match_method"] = "tax_component"
+                    rj["sbs_review_reason"] = ("bare current / deferred line between pre-tax and net income"
+                                               if lab in _TAX_COMPONENTS else
+                                               "tax line between pre-tax and net income")
+                    stats["tax_component"] += 1
+                comps.append(rj)
+            elif not rj.get("label") and comps and not rj.get("sbs_label"):
+                vals = [_amount_n(c, at) for c in comps]
+                v = _amount_n(rj, at)
+                if v is not None and None not in vals and abs(sum(vals) - v) <= len(vals) + 0.5:
+                    rj["sbs_label"] = _INCOME_TAX_FIELD
+                    rj["sbs_scope"] = "in_scope"
+                    rj["sbs_match_method"] = "tax_component_total"
+                    rj["sbs_review_reason"] = f"= sum of the {len(comps)} tax components above"
+                    stats["tax_component_total"] += 1
+                break
+    return stats
+
+
+# Bare asset classes printed in the INVESTING section of a cash-flow statement: the line is the
+# acquisition of that class (WEG 6.02.02 «Imobilizado» −1.122.990, 6.02.03 «Intangível» −81.652 —
+# audit 2026-11-04, WEG14). The dictionary matches them to the BALANCE fields, which the scope-gate
+# rightly blocks in the cash flow; as an outflow of the investing section they are CAPEX.
+_BARE_ASSET_CAPTIONS = {"imobilizado", "intangivel", "intangiveis", "imobilizado e intangivel",
+                        "ativo imobilizado", "ativo intangivel", "imobilizados", "bens do imobilizado"}
+
+
+def _stage_capex_asset_lines(statements, stats):
+    cf = statements.get("CASH_FLOW_LST") or []
+    investing, open_at = set(), None
+    for i, r in enumerate(cf):
+        code = str(r.get("code") or "")
+        if code.startswith("6.02."):
+            investing.add(i)
+            continue
+        if r.get("sbs_label") == "operatingCashFlowAmount":
+            open_at = r.get("page_nb")
+        elif r.get("sbs_label") == "netCashInvestmentAmount":
+            open_at = None
+        elif open_at is not None and not code and r.get("page_nb") == open_at:
+            investing.add(i)
+    for i in sorted(investing):
+        r = cf[i]
+        if r.get("sbs_label") or not r.get("label") or normalize(r["label"]) not in _BARE_ASSET_CAPTIONS:
+            continue
+        v = _amount_n(r, _perspective([r]))
+        if v is None or v >= 0:
+            continue          # a positive asset line in investing is a disposal, not CAPEX
+        r.pop("sbs_blocked_reason", None)
+        r["sbs_label"] = "capitalExpenditureAmount"
+        r["sbs_scope"] = "in_scope"
+        r["sbs_match_method"] = "investing_asset_line"
+        r["sbs_review_reason"] = "bare asset class in the investing section = its acquisition (outflow)"
+        stats["capex_asset_line"] += 1
+    return stats
+
+
+# EBIT = the operating result BEFORE the financial result (user decision 2026-11-04). A «Resultado
+# operacional» printed AFTER the financial lines includes them (Uniar «RESULTADO OPERACIONAL» =
+# pre-tax; Serasa «RESULT OPERACIONAL» after «RES FINANCEIRO») — not EBIT: its label is withdrawn.
+_FIN_RESULT_CAPTIONS = ("resultado financeiro", "result financeiro", "res financeiro",
+                        "receitas financeiras", "receita financeira", "rec financeiras",
+                        "despesas financeiras", "despesa financeira", "desp financeiras")
+_FIN_RESULT_FIELDS = {"interestPaidAmount", "interestIncomeAndSimilarAmount"}
+
+
+def _stage_ebit_before_financial(statements, stats):
+    seen_fin = {}
+    for r in statements.get("INCOME_STATEMENT_LST") or []:
+        pg = r.get("page_nb")
+        lab = normalize(r.get("label") or "")
+        if r.get("sbs_label") == "operatingProfitAmount" and seen_fin.get(pg) and not r.get("code"):
+            r["sbs_label"] = None
+            r.pop("sbs_scope", None)
+            r["sbs_blocked_reason"] = "after_financial_result"
+            r["sbs_review_reason"] = ("operating result printed after the financial result: not EBIT "
+                                      "(user rule 2026-11-04)")
+            r["needs_review"] = True
+            stats["ebit_after_financial"] += 1
+            continue
+        if r.get("columns") and (r.get("sbs_label") in _FIN_RESULT_FIELDS
+                                 or lab.startswith(_FIN_RESULT_CAPTIONS)):
+            seen_fin[pg] = True
+    return stats
+
+
 def _stage_twin_section(rows, stmt_name, mapping, match_cfg, sections, stats,
                         clear_review=False):
     """Stage 1 — resolve current/non-current twins that matched via a SHARED
@@ -895,6 +1213,7 @@ def _stage_empty_label(rows, stmt_name, sections, stats):
     if stmt_name not in _BALANCE_SCOPES:
         return stats
     small_span = _is_small_span(rows)
+    tree = _subtotal_tree(rows)
     for idx, row in enumerate(rows):
         if row.get("label"):
             continue
@@ -902,7 +1221,34 @@ def _stage_empty_label(rows, stmt_name, sections, stats):
         shown = small_span or str(row.get("page_class", "")).startswith("PRIMARY")
         if not shown:
             continue
-        ef, em, er = _resolve_empty_label(rows, idx, stmt_name, sections)
+        if idx in tree["grand"]:
+            # the page's grand total, printed without a name: on the assets side it IS total
+            # assets; on the liabilities side (liabilities + equity) it has no SBS field
+            # (totalLiabilitiesAmount = ST + LT, derived in PASS 2 — never the grand total)
+            held = any(r.get("sbs_label") == "totalAssetsAmount" and r.get("page_nb") == row.get("page_nb")
+                       for r in rows)
+            if stmt_name == "BALANCE_ASSETS_LST" and not held:
+                row["sbs_label"] = "totalAssetsAmount"
+                row["sbs_scope"] = "in_scope"
+                row["sbs_match_method"] = "empty_label_arith"
+                row["sbs_review_reason"] = "grand total = sum of the section totals"
+                stats["empty_label_resolved"] += 1
+                stats["field_totalAssetsAmount"] += 1
+            else:
+                row["sbs_match_method"] = "empty_label_grand_total"
+                row["sbs_review_reason"] = "grand total (sum of the section totals) — no SBS field"
+                stats["empty_label_grand_total"] += 1
+            continue
+        p = _is_intermediate(rows, idx, tree)
+        if p is not None:
+            # a block subtotal inside a section (e.g. «Realizável a longo prazo»): it has no SBS
+            # field, like a detail line — not a review case
+            row["sbs_match_method"] = "empty_label_intermediate"
+            row["sbs_review_reason"] = (f"intermediate subtotal: part of the subtotal "
+                                        f"{rows[p].get('label') or rows[p].get('sbs_label') or 'unnamed'!r}")
+            stats["empty_label_intermediate"] += 1
+            continue
+        ef, em, er = _resolve_empty_label(rows, idx, stmt_name, sections, tree)
         if em is None:
             continue
         row["sbs_match_method"] = em
@@ -924,7 +1270,10 @@ def _stage_scope_gate(statements, mapping, stats):
     not in the field's allowed_statements is BLOCKED (sbs_label -> None,
     sbs_blocked_reason set) ONLY if that field is also captured in-home elsewhere
     in this document (no data lost); otherwise the label is KEPT and flagged
-    needs_review (recover). Double-home fields are allowed in two statements."""
+    needs_review (recover). Double-home fields are allowed in two statements.
+    A `strict_scope` field (mapping, build_sbs_mapping.STRICT_SCOPE — provisions,
+    user decision 2026-11-05) is ALWAYS blocked outside its statements: the cash
+    flow repeats the balance caption as a flow, never the balance figure."""
     fc = mapping.get("_field_config", {})
     # in-home index: field -> set of buckets where it sits in an allowed statement
     in_home = defaultdict(set)
@@ -942,7 +1291,7 @@ def _stage_scope_gate(statements, mapping, stats):
             allowed = fc[f]["allowed_statements"]
             if not allowed or bucket in allowed:
                 continue
-            if in_home.get(f):
+            if in_home.get(f) or fc[f].get("strict_scope"):
                 r["sbs_blocked_reason"] = "out_of_scope"
                 r["sbs_label"] = None
                 r.pop("sbs_scope", None)
@@ -1036,6 +1385,9 @@ def _stage_serasa_net_income(statements, stats):
 # --------------------------------------------------------------------------- #
 # Balance liability totals — arithmetic resolution of totalLiabilitiesAmount.
 # --------------------------------------------------------------------------- #
+# USER MAPPING 2026-11-04: the section totals are financialLiabilitiesShortTerm (current) and
+# financialLiabilitiesLongTerm (non-current); "ST" / "LT" below = those TOTALS (the loans fields
+# shortTermLiabilitiesAmount / longTermLiabilitiesAmount play no part here).
 # totalLiabilitiesAmount (SBS #23) is "Total liabilities (short-term + long-term
 # + provisions)" — liabilities ONLY, EXCLUDING equity. It is therefore NOT the
 # Portuguese balance bottom line ("Total do passivo e patrimônio líquido" /
@@ -1048,7 +1400,8 @@ def _stage_serasa_net_income(statements, stats):
 # period — each is its own self-balancing statement):
 #   RC#2 fix — some templates (notably Serasa) print a "PASSIVO NÃO CIRCULANTE"
 #     subtotal that ALREADY INCLUDES equity. The marker/arithmetic section logic
-#     then labels that inflated figure longTermLiabilitiesAmount and leaves the
+#     then labels that inflated figure as the non-current total (financialLiabilitiesLongTerm since
+#     the user mapping 2026-11-04) and leaves the
 #     real long-term line ("EXIGÍVEL A LONGO PRAZO") unlabelled, double-counting
 #     equity and breaking the balance identity by exactly the equity amount. When
 #     the labelled long-term value equals (assets − short-term) AND a non-zero
@@ -1116,7 +1469,7 @@ def _stage_balance_liability_totals(statements, mapping, stats):
     """Stage 5c — arithmetic totalLiabilitiesAmount + the equity-in-long-term fix.
 
     Runs over the liabilities bucket using the balance identity
-    (assets == short-term + long-term + equity) per (account_type, period) cell.
+    (assets == current + non-current liabilities + equity) per (account_type, period) cell.
     See the module-level note above for the two corrections it makes. Pure
     arithmetic, self-gating: a no-op on a balance that is already internally
     consistent (DFP/ITR/2-col), active only where a figure double-counts equity
@@ -1157,7 +1510,7 @@ def _stage_balance_liability_totals(statements, mapping, stats):
     # is always printed, even in the Serasa shape).
     keys = set()
     for r in liab:
-        if r.get("sbs_label") == "shortTermLiabilitiesAmount":
+        if r.get("sbs_label") == "financialLiabilitiesShortTerm":
             keys.update(_cell_keys(r))
     if not keys:
         return stats
@@ -1165,8 +1518,8 @@ def _stage_balance_liability_totals(statements, mapping, stats):
     derived_cols = []  # (key, total_liab_value) to synthesize if not printed
     for key in sorted(keys):
         at, period = key
-        ST = pick(liab, "shortTermLiabilitiesAmount", key)
-        LT = pick(liab, "longTermLiabilitiesAmount", key)
+        ST = pick(liab, "financialLiabilitiesShortTerm", key)
+        LT = pick(liab, "financialLiabilitiesLongTerm", key)
         EQ = pick(liab, "shareholdersFundsAmount", key)
         G = pick(assets or [], "totalAssetsAmount", key)
 
@@ -1179,7 +1532,7 @@ def _stage_balance_liability_totals(statements, mapping, stats):
             lt_true = G - ST - EQ
             # demote the equity-inclusive long-term row for this cell
             for r in liab:
-                if (r.get("sbs_label") == "longTermLiabilitiesAmount"
+                if (r.get("sbs_label") == "financialLiabilitiesLongTerm"
                         and _cell_value(r, at, period) is not None
                         and abs(_cell_value(r, at, period) - LT) <= tol(LT)):
                     r["sbs_label"] = None
@@ -1195,7 +1548,7 @@ def _stage_balance_liability_totals(statements, mapping, stats):
                 if (r.get("sbs_label") is None and not r.get("sbs_blocked_reason")
                         and _cell_value(r, at, period) is not None
                         and abs(_cell_value(r, at, period) - lt_true) <= tol(lt_true)):
-                    r["sbs_label"] = "longTermLiabilitiesAmount"
+                    r["sbs_label"] = "financialLiabilitiesLongTerm"
                     r["sbs_match_method"] = "balance_identity"
                     r["sbs_match_source"] = "arithmetic"
                     r["sbs_match_score"] = 100.0
@@ -1205,6 +1558,38 @@ def _stage_balance_liability_totals(statements, mapping, stats):
                     stats["liab_longterm_promoted"] += 1
                     break
             LT = lt_true
+
+        # RC#3: one block of the identity printed but not labelled (1Q26 p22: the equity total
+        # 2.106.440 stays unresolved — «Reserva de lucros» is printed WITH its total above its
+        # components, so no running sum matches): the unlabelled liabilities line whose value is
+        # exactly what the identity leaves for it takes the field.
+        def fill(field, need):
+            if abs(need) <= 2.0:
+                # the identity leaves NOTHING for this block: it is absent (zero), never a printed line
+                # — a dash the OCR read as «1» passed the ±2 test and took the field (São Salvador p21
+                # «Outras obrigações», audit 2026-11-04, SSA7); sbs_fields values it zero_by_identity
+                return None
+            for r in liab:
+                if (r.get("sbs_label") is None and not r.get("sbs_blocked_reason")
+                        and not r.get("sbs_duplicate_of")
+                        and _cell_value(r, at, period) is not None
+                        and abs(_cell_value(r, at, period) - need) <= 2.0):
+                    r["sbs_label"] = field
+                    r["sbs_match_method"] = "balance_identity"
+                    r["sbs_match_source"] = "arithmetic"
+                    r["sbs_match_score"] = 100.0
+                    r["sbs_scope"] = "in_scope"
+                    r["sbs_review_reason"] = (
+                        "= total assets - short-term - long-term" if field == "shareholdersFundsAmount"
+                        else "= total assets - short-term - equity")
+                    stats[f"liab_identity_fill_{field}"] += 1
+                    return need
+            return None
+        if G is not None and ST is not None:
+            if EQ is None and LT is not None:
+                EQ = fill("shareholdersFundsAmount", G - ST - LT)
+            elif LT is None and EQ is not None:
+                LT = fill("financialLiabilitiesLongTerm", G - ST - EQ)
 
         # totalLiabilitiesAmount = ST + LT (liabilities only, equity excluded).
         if ST is None and LT is None:
@@ -1233,7 +1618,7 @@ def _stage_balance_liability_totals(statements, mapping, stats):
                     r["sbs_match_source"] = "arithmetic"
                     r["sbs_match_score"] = 100.0
                     r["sbs_scope"] = "in_scope"
-                    r["sbs_review_reason"] = "total liabilities = short-term + long-term"
+                    r["sbs_review_reason"] = "total liabilities = current + non-current liabilities"
                     if partial:
                         r["needs_review"] = True
                     stats["total_liab_relabelled"] += 1
@@ -1261,7 +1646,7 @@ def _stage_balance_liability_totals(statements, mapping, stats):
             "sbs_match_score": 100.0,
             "sbs_scope": "in_scope",
             "sbs_review_reason": (
-                "derived total liabilities (short-term + long-term); "
+                "derived total liabilities (current + non-current liabilities); "
                 "no explicit liabilities-total line in the source"),
             "sbs_derived": True,
         })
@@ -1386,7 +1771,9 @@ def _stage_dedup(statements, mapping, stats):
             amt = _row_amounts_key(r)
             if not amt or all(v == "" for _, _, v in amt):
                 continue
-            name_clusters[(r.get("page_nb"), normalize(label), amt)].append(idx)
+            # two lines with different CVM codes are two lines of the form, never a re-print (ZAMP /
+            # Unipar diluted vs basic EPS «ON» / «PNB» 3.99.02.01 vs 3.99.01.01 — audit 2026-11-04)
+            name_clusters[(r.get("page_nb"), normalize(label), amt, r.get("code"))].append(idx)
         for _k, idxs in name_clusters.items():
             if len(idxs) < 2:
                 continue
@@ -1405,7 +1792,9 @@ def _stage_dedup(statements, mapping, stats):
             amt = _row_amounts_key(r)
             if not amt or all(v == "" for _, _, v in amt):
                 continue
-            groups[(f, amt)].append(idx)
+            # a coded parent and its only child carry the same field and figures but are both printed
+            # form lines (the Excel shows the form; sbs_fields counts the parent once — hierarchy)
+            groups[(f, amt, r.get("code"))].append(idx)
         for _grp_key, idxs in groups.items():
             members = [i for i in idxs if i not in dupes]
             if len(members) < 2:
@@ -1472,6 +1861,17 @@ def label_statements(statements, mapping, match_cfg, stats=None, document_type=N
     for rows in statements.values():
         rows[:] = [r for r in rows if not r.get("sbs_derived")]
 
+    # Rows outside the statement zone (Serasa analysis sections: indices, evolucao, the
+    # Serasa "fluxo de caixa", indicadores — tagged by Stage 1) are NOT statement lines:
+    # they are never labelled and never take part in scope-gate / dedup decisions. The
+    # stages run on a view without them; rows a stage appends (the derived total) are
+    # merged back into the caller's lists at the end. Column-header lines the provider
+    # returned as figures (`non_figure_line`, Stage 1 step 4d) are excluded the same way.
+    full = statements
+    statements = {k: [r for r in rows if not (r.get("serasa_analysis") or r.get("non_figure_line")
+                                              or r.get("other_statement"))]
+                  for k, rows in full.items()}
+
     # PASS 1 — per-bucket match + structural resolution.
     for stmt_name, rows in statements.items():
         groups_here = balance_or_twin.get(stmt_name, [])
@@ -1491,9 +1891,20 @@ def label_statements(statements, mapping, match_cfg, stats=None, document_type=N
         _stage_twin_section(rows, stmt_name, mapping, match_cfg, sections,
                             stats, clear_review=clear_twin)
         _stage_empty_label(rows, stmt_name, sections, stats)
+        _stage_tax_components(rows, stmt_name, stats)
+        if stmt_name in _BALANCE_SCOPES:
+            # keep the balance section of every labelled row: sbs_fields counts only the
+            # CURRENT rows of the *_CURRENT fields (trade debtors / creditors, stock)
+            for row, sec in zip(rows, sections):
+                if sec and row.get("sbs_label"):
+                    row["sbs_section"] = sec
+                else:
+                    row.pop("sbs_section", None)
 
     # PASS 2 — document-level stages (need all buckets labelled first).
     _stage_scope_gate(statements, mapping, stats)
+    _stage_capex_asset_lines(statements, stats)
+    _stage_ebit_before_financial(statements, stats)
     _stage_struct_validate(statements, mapping, stats)
     if document_type == "SERASA":
         _stage_serasa_net_income(statements, stats)
@@ -1507,6 +1918,19 @@ def label_statements(statements, mapping, match_cfg, stats=None, document_type=N
     for rows in statements.values():
         for row in rows:
             row.pop("_sbs_code_locked", None)
+    # Merge rows a stage appended to the view (the derived total) back into the caller's lists.
+    for k, rows in statements.items():
+        have = {id(r) for r in full[k]}
+        full[k].extend(r for r in rows if id(r) not in have)
+    # sbs_duplicate_of: the stages index the VIEW (without the Serasa analysis / non-figure / other-
+    # statement rows); the public field is the index of the kept row in the bucket's FULL list — it
+    # pointed at a DVA line before (ZAMP INCOME_STATEMENT_LST[72] -> 40, audit 2026-11-04 P15)
+    for k, rows in statements.items():
+        pos = {id(r): i for i, r in enumerate(full[k])}
+        for r in rows:
+            d = r.get("sbs_duplicate_of")
+            if isinstance(d, int) and 0 <= d < len(rows):
+                r["sbs_duplicate_of"] = pos[id(rows[d])]
     return stats
 
 
@@ -1587,6 +2011,16 @@ def main():
     )
     stats = annotate_output(output, mapping, match_cfg)
     _print_stats(stats, total_rows)
+    # the per-field values depend on the labels just stamped: recompute them (sbs_fields.py)
+    try:
+        import sbs_fields
+        with open(args.mapping, encoding="utf-8") as f:
+            output["sbs_fields"] = sbs_fields.compute(output, json.load(f).get("fields", {}))
+        chk = output["sbs_fields"]["checks"]
+        print(f"  sbs_fields: {len(output['sbs_fields']['fields'])} fields valued, identity checks "
+              f"{sum(c['ok'] for c in chk)} ok / {sum(not c['ok'] for c in chk)} failed")
+    except Exception as exc:  # pragma: no cover
+        print(f"  sbs_fields: not recomputed ({exc})")
 
     if args.dry_run:
         print("\n(dry-run: nothing written)")
