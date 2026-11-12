@@ -622,9 +622,10 @@ page whose codes are mostly 4 / 5 / 7, and any row with such a code, gets `other
 ALL-CAPS continuation starting with the conjunction «E» counts as a continuation (ALUBAR p7
 «… IMPOSTO DE RENDA» / «E CONTRIBUIÇÃO SOCIAL»).
 
-### Optional — OCR words recovery (`words_recovery.recover`)
+### OCR words recovery (`words_recovery.recover`) — on by default
 
-Only when the words layer is supplied (`process(data, words=...)`, CLI `--words`): lost cells, lost
+When the words layer is supplied (`process(data, words=...)`; the CLI takes `<id>_words.json` next to the
+input by default, `--words <file>` / `--no-words`; on by default since 2026-11-12): lost cells, lost
 lines, lost labels and lost columns of continued pages are recovered from the reciTAL OCR words and
 flagged `source` / `label_source: "ocr_words"`. Runs here — after the wrapped-label merge, before the
 Serasa zone — so the recovered rows take part in every later step. Without words the output is the
@@ -793,11 +794,14 @@ gate rejected the right row of the same line (Romagnole p11). Verified: panels a
 the 6 side-by-side balance pages of the 22-PDF corpus. Stage 2 uses the same panels (computed from the
 row anchors) to count columns per panel (Delfia p5 — see the Stage-2 doc).
 
-> ⚠️ **Open (audit 2026-11-04, DEL10):** a figure's panel is decided by its centre x with a 0.01 margin before
-> the next panel's names (`_panel_index`). The SHORT numbers of the left panel's last column can therefore
-> fall into the right panel (Delfia p5, Consolidado 2022: 58 / 371 / 933 — centres 0.4727–0.4770 vs the
-> right panel's names at 0.4827). Fix idea: decide a figure's panel by its right edge (x_max) against the next
-> panel's name edge. Not implemented yet.
+> ⚠️ **Fixed 2026-11-12 (audit DEL10):** a figure's panel is decided by its centre x WITHOUT margin
+> (`panel_of`); only names keep the 0.01 margin (`NAME_PANEL_MARGIN`, in `build_panels` / `row_panel`). With
+> the margin the SHORT numbers of the left panel's last column fell into the right panel (Delfia p5,
+> Consolidado 2022: 58 / 371 / 933 — centres 0.4727–0.4745 vs the right panel's names at 0.4827; the words
+> step took the word «69» the same way). Measured on the 36 documents (corpus + audit) before the change:
+> these are the only figures that change panel — the right-edge rule gives the same answer, the
+> right-panel figures stand ≥ 0.074 right of the names edge. Delfia vs the auditor reference: wrong cells
+> 2 → 0 (3 → 0 with words), the extra unnamed row gone, the right panel's header zones switch on.
 
 ⚠️ Both stages must apply the gate. The routing originally lived only in `materialize_orphans`
 (Step 2b); leaving `augment_with_only_amount` (Step 2) on a pure-`y` rule meant it ran **first**,
@@ -993,8 +997,10 @@ python3.13 structure_ocr.py path/to/input.json -o path/to/output.json
 # for visual cross-checking against the original PDF.
 python3.13 structure_ocr.py comprehansive_sample.json -o my_output_debug.json --debug
 
-# OPTIONAL: recover what the extraction lost from the reciTAL OCR words layer
-python3.13 structure_ocr.py input.json -o output.json --words words.json
+# Words layer (on by default): <id>_words.json next to <id>_raw.json is used automatically
+python3.13 structure_ocr.py <id>_raw.json -o output.json
+python3.13 structure_ocr.py input.json -o output.json --words words.json   # explicit file
+python3.13 structure_ocr.py input.json -o output.json --no-words           # words-free fallback
 ```
 
 **CLI parameters**
@@ -1002,9 +1008,10 @@ python3.13 structure_ocr.py input.json -o output.json --words words.json
 | Argument | Default | Description |
 |---|---|---|
 | `input` (positional) | `comprehansive_sample.json` | Raw OCR JSON to process. |
-| `-o`, `--output` | `structured_output.json` (⚠️ a golden — always pass `-o`) | Output path. The report is written next to it as `<name>_report.json`. |
+| `-o`, `--output` | `<input>_structured.json` next to the input (`<id>_raw.json` → `<id>_structured.json`) | Output path. The report is written next to it as `<name>_report.json`. A golden (`structured_output*.json`) is written only with an explicit `-o` (the old default `structured_output.json` overwrote the main golden; changed 2026-11-12). |
 | `--debug` | off | Add `x`, `y`, `_match` fields for inspection. |
-| `--words` | off | OPTIONAL reciTAL words layer (`GET /files/{id}/words/`) → words recovery ([`Words_Recovery.md`](Words_Recovery.md)). |
+| `--words` | `<name>_words.json` next to the input, if present (`<id>_raw.json` → `<id>_words.json`) | reciTAL words layer (`GET /files/{id}/words/`) → words recovery ([`Words_Recovery.md`](Words_Recovery.md)); on by default since 2026-11-12. |
+| `--no-words` | off | Words-free fallback (as if reciTAL returned no layer). |
 
 **Outputs**
 

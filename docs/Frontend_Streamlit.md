@@ -109,11 +109,12 @@ The uploader accepts either end of the pipeline and detects which by the JSON ro
 | Root is a **`dict`** with a `statements` key | A structured output | Used as-is (no re-processing) |
 | Anything else | — | Friendly error explaining the two accepted shapes |
 
-**Optional second upload — OCR words layer.** Below the main uploader, *OCR words layer (optional)*
-accepts the reciTAL words layer (`GET /files/{id}/words/`). With it, a raw upload runs
+**Second upload — OCR words layer (the default input since 2026-11-12).** Below the main uploader,
+*OCR words layer · camada words* accepts the reciTAL words layer (`GET /files/{id}/words/`, the
+`<id>_words.json` of `recital_fetch.py export`). With it, a raw upload runs
 `structure_ocr.process(data, words=...)`: figures / lines / labels the extraction lost are recovered
-(`docs/Words_Recovery.md`). Without it the app behaves exactly as before — production may not have the
-words layer.
+(`docs/Words_Recovery.md`) and the source line names the words file. Without it the app runs the
+words-free fallback and says so: «No OCR words layer — fallback mode».
 
 This mirrors the input-shape fact from `CLAUDE.md` (the raw OCR root is a **list of 11**, not a dict).
 A raw upload also offers a **Download structured JSON** button so the reviewer can keep the Stage-1-3
@@ -210,7 +211,7 @@ The palette mirrors `export_excel.py` so the screen and workbook are one brand:
 
 Every toggle triggers a Streamlit rerun, so the pipeline result and the workbook are memoized — but
 **per browser session**, in `st.session_state` (`_session_memo`), keyed by a SHA-256 of the uploaded
-bytes (raw JSON + optional words file) and of the output:
+bytes (raw JSON + the words file, when given) and of the output:
 
 - **`load_and_process(file_bytes, filename, words_bytes)`** — parsing + Stages 1-3, once per session
   and document; toggles are instant.

@@ -29,9 +29,9 @@ order the code runs it — and why each step exists.**
 ## 1. The pipeline in one picture
 
 ```
- reciTAL extraction (raw JSON)          OPTIONAL: reciTAL OCR words layer
+ reciTAL extraction (raw JSON)          reciTAL OCR words layer (on by default)
         │                                         │
-        ▼                                         │ (production may not have it)
+        ▼                                         │ (missing -> words-free fallback)
  ┌───────────────────────────── structure_ocr.process() ─────────────────────────────┐
  │ Stage 0  metadata: date / period / currency / unit, provider tag                    │
  │ Stage 1  table reconstruction: rows, columns, periods, perspectives, codes, names   │
@@ -69,7 +69,7 @@ Three principles hold everywhere:
 | Words layer `<id>_words.json` | same export | **Optional.** Never required by any stage (see [`Words_Recovery.md`](Words_Recovery.md)) |
 | `anchors.yaml` | business-editable | Stage-2 anchor lexicon; also the stop-words / benign words / threshold of the name matcher |
 | `sbs_label_mapping.json` | **generated** by `build_sbs_mapping.py` from `labels_OLD.yaml` + `SBS_fields_mapping_with_INDIAN_labels.xlsx` | Never edit by hand; edit `EXTRA_ALIASES` / tables in `build_sbs_mapping.py`, then rebuild |
-| Structured output `<name>.json` | `structure_ocr.py <raw> -o <name>.json [--words <words>]` | Metadata, document type, statements (rows), page classification, `sbs_fields` |
+| Structured output `<name>.json` | `structure_ocr.py <raw> -o <name>.json` (words layer `<id>_words.json` next to `<id>_raw.json` used automatically; `--words <file>` / `--no-words`) | Metadata, document type, statements (rows), page classification, `sbs_fields` |
 | Quality report `<name>_report.json` | same run | Counters of every step (see §5.6) |
 | Workbook `<name>.xlsx` | `export_excel.py <name>.json -o <name>.xlsx` | Sheets `metadata`, `balance`, `income`, `cash_flow`, `sbs_fields` |
 
@@ -215,7 +215,7 @@ show the same (light red row, «Review» column, REVIEW badge, «Needs review» 
 | Production may have **no** words layer: no stage may depend on it | user 2026-11-04 | `words_recovery.py` optional |
 | Column (x position) wins over the provider's period tag | user 2026-11-04 | step 2c |
 | An unambiguous table header wins over the tag and over the pair rule: period + perspective from the column's zone; the S2 alternative (every LST figure votes + the 6051 singles vote) is rejected | user 2026-11-05, simulation `_audit/ZONES_SIMULATION_2026-11-05.md` | step 2c', Step 5 |
-| **Liability fields (pinned):** `shortTermLiabilitiesAmount` / `longTermLiabilitiesAmount` = short- / long-term **credits and loans** (empréstimos e financiamentos, debêntures, títulos emitidos, mútuos/empréstimos de sócios); `financialLiabilitiesShortTerm` / `financialLiabilitiesLongTerm` = **total** current / non-current liabilities. Opposite of the xlsx Description text — do not revert | user 2026-11-04 | `build_sbs_mapping.py` JOIN, `code_map`, twin group `debt`, Stage-3 section totals, `sbs_fields` identities |
+| **Liability fields (pinned):** `shortTermLiabilitiesAmount` / `longTermLiabilitiesAmount` = short- / long-term **credits and loans** (empréstimos e financiamentos, debêntures, títulos emitidos, mútuos/empréstimos de sócios — the last two confirmed by the user 2026-11-12, audit P11a); `financialLiabilitiesShortTerm` / `financialLiabilitiesLongTerm` = **total** current / non-current liabilities. Opposite of the xlsx Description text — do not revert | user 2026-11-04 | `build_sbs_mapping.py` JOIN, `code_map`, twin group `debt`, Stage-3 section totals, `sbs_fields` identities |
 | `totalLiabilitiesAmount` = current + non-current liabilities, equity excluded, never the balance grand total | design | Stage 3 PASS 2.6 |
 | Bio-asset amortisation is depreciation; bio-asset purchases are CAPEX | user 2026-11-04 | aliases in `build_sbs_mapping.py` |
 | EBIT = the operating result BEFORE the financial result; a «resultado operacional» after it is not EBIT (left empty + review if nothing else) | user 2026-11-04 | Stage 3 PASS 2.3, `sbs_fields._ebit_not_printed` |
@@ -334,29 +334,26 @@ sheet), `note`, `needs_review`, `review_reason`, `held_for_sale`
 
 | Tool | Command | Use |
 |---|---|---|
-| Regression harness | `python3.13 -E -P harness/run.py snapshot <tag> [--words]` then `diff <a> <b> -v` | 22 reciTAL PDFs (`_recital/`), cell + Excel + SBS-field diff, scoreboard (conservation, off-line figures, period grid, missed words, missing statements, identities OK/✗, goldens). Run before AND after any change; explain every diff |
+| Regression harness | `python3.13 -E -P harness/run.py snapshot <tag> [--no-words]` (default = words layer ON) then `diff <a> <b> -v` | 22 reciTAL PDFs (`_recital/`), cell + Excel + SBS-field diff, scoreboard (conservation, off-line figures, period grid, missed words, missing statements, identities OK/✗, goldens). Run before AND after any change; explain every diff |
 | Local goldens | `python3.13 -E -P harness/run.py goldens` | 8 `structured_output*.json` byte-identical to the code's output; regenerate only after showing the diff |
 | Self-test | `python3.13 -E -P harness/run.py selftest` | company-only rule, ITR Consolidado-only row counts, words step pluggability |
 | Independent audit | `AUDIT_BRIEF.md`, `python3.13 -E -P harness/audit_run.py <id> … --all-pages` | a separate session builds its own reference from page images; findings → `_audit/`; the reference of each audited document is kept as `_audit/<id>/auditor_reference.txt` (`sheet\|page\|key\|N\|N-1`; Cibra: 8 fields with the Controladora columns) to re-check a later fix |
 
 Invariants that must hold after any change: conservation (output figures = in-scope extracted
 figures), `process(data)` without words = the words-free output, 0 failed identities on the corpus
-(168 OK in production mode, 172 with words), no `needs_review` cleared, the 8 goldens explained.
+(172 OK with the words layer — production mode since 2026-11-12 —, 168 in the words-free fallback), no
+`needs_review` cleared, the 8 goldens explained.
 
 ---
 
 ## 8. Known limitations and open items
 
-* **Panel boundary for short figures (DEL10, latent).** Figures are assigned to a panel by their
-  centre x with a 0.01 margin before the next panel's names; the short numbers of the left panel's
-  last column can fall into the right panel (Delfia p5: 58 / 371 / 933). Not fixed yet.
-* **Figures the extraction lost.** Not recoverable without the words layer (Delfia p5/p9 Consolidado
-  cells, p6 revenue N-1); with it, `--words` (a zone column joins the words grid even when the
-  extraction left it almost empty — Cibra p7 Conso 2024).
+* **Figures the extraction lost.** Recovered by the words layer (on by default; a zone column joins the
+  words grid even when the extraction left it almost empty — Cibra p7 Conso 2024); not recoverable in
+  the fallback without it (Delfia p5/p9 Consolidado cells, p6 revenue N-1).
 * **Header zones are not built** (previous behaviour stands) on:
   - pages with two tables or a table continued from the previous page;
   - a page whose date frame is centred over a wide column (MBP p14);
-  - a panel with a stray column (Delfia p5 right panel, DEL10);
   - documents without a per-column perspective header: TWO_COL, ITR, SERASA, UPPERCASE.
 
   1Q26 note pages p49 / p56 / p66 keep 25 Step-2c period errors (not exported).

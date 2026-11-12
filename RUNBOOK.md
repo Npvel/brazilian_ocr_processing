@@ -16,7 +16,7 @@
 > [`docs/Primary_Statement_Classification.md`](docs/Primary_Statement_Classification.md) (Stage 2),
 > [`docs/SBS_Labelling.md`](docs/SBS_Labelling.md) (Stage 3 + `sbs_fields`),
 > [`docs/Excel_Export.md`](docs/Excel_Export.md) (Stage 4),
-> [`docs/Words_Recovery.md`](docs/Words_Recovery.md) (optional words layer),
+> [`docs/Words_Recovery.md`](docs/Words_Recovery.md) (words layer, on by default),
 > [`docs/Frontend_Streamlit.md`](docs/Frontend_Streamlit.md) (web UI).
 
 ---
@@ -144,7 +144,7 @@ python3.13 -m pip install pyyaml rapidfuzz openpyxl streamlit \
 | `doc_type.py` | Document type + filter policy (single source of truth). | **No** — library. |
 | `export_excel.py` | **Stage 4** — render structured JSON to Allianz Excel. | **Yes** — has a CLI. |
 | `app.py` | Streamlit web UI (upload / review / download the same Excel). | **Yes** — `streamlit run`. |
-| `words_recovery.py` | OPTIONAL — recovery from the reciTAL OCR words layer. | **No** — `structure_ocr.py --words`. |
+| `words_recovery.py` | Recovery from the reciTAL OCR words layer — on by default since 2026-11-12, pluggable. | **No** — `structure_ocr.py` (`<id>_words.json` automatic, `--words`, `--no-words`). |
 | `build_sbs_mapping.py` | Regenerates `sbs_label_mapping.json` from YAML + xlsx (+ `EXTRA_ALIASES`, twin groups, code map, the pinned liability mapping). | **Yes** — run after editing the sources (§8). |
 | `diagnose_pages.py` | Read-only Stage-2 diagnostics → table + `page_diagnostics.json` (simplified preview: page-level columns). | **Yes** — but run *from the project dir* (uses relative paths). |
 | `classify_statements.py` | Stage-2 classifier logic. | **No** — library; used by `structure_ocr.py` or imported. |
@@ -169,7 +169,7 @@ python3.13 -m pip install pyyaml rapidfuzz openpyxl streamlit \
 ## 4. The Pipeline at a Glance
 
 ```
-   raw OCR JSON  (+ optional OCR words layer, --words)
+   raw OCR JSON  + OCR words layer (default: <id>_words.json / --words; --no-words = fallback)
         │
         ▼
    structure_ocr.py · process()
@@ -204,12 +204,12 @@ command**, not part of `structure_ocr.py`.
 **The order inside `structure_ocr.process()`** (details and reasons: `docs/Pipeline_Overview.md` §3):
 
 ```
-metadata (extract → normalize; optional words metadata; provider tag)
+metadata (extract → normalize; words metadata when the layer is there; provider tag)
 → Step 1  row anchors → panels → STAGE 2 page classification (columns per panel)
 → Step 1b detach off-line figures → 2 place ONLY_AMOUNT → 2b unnamed rows
 → Step 2c period from the column grid → 2c' header zones → 2d three-column balance (N | N-1 | opening)
 → Step 4  codes → 4b wrapped names (A / B / C / D) → 4d header lines → 4e DRA / DMPL / DVA (ITR)
-→ number format, unit from centavos → (optional) words recovery → 4c Serasa zone
+→ number format, unit from centavos → words recovery (default; skipped without the layer) → 4c Serasa zone
 → Step 3  ACCOUNT_TYPE headers → 5 assembly (perspectives, D/C suffixes, US notation, flags)
 → Step 5b sign / dash proof (income statement: dash test only) → document type
 → STAGE 3 PASS 1 per statement: sections → code match → match → twins → empty-label subtotals → tax lines
@@ -260,23 +260,30 @@ PDF. Use this when verifying a tricky page; omit for clean production output.
    `python3.13 -E -P harness/recital_fetch.py files 5485 20` (or `files 6051 20`)
 3. Download it in the shape the app takes (READ-ONLY GETs):
    `python3.13 -E -P harness/recital_fetch.py export <file_id>` →
-   `_inbox/<id>/<id>_raw.json` (main upload) + `_inbox/<id>/<id>_words.json` (optional words layer).
-4. `python3.13 -m streamlit run app.py` → upload the raw JSON (and, to try the recovery, the words file)
+   `_inbox/<id>/<id>_raw.json` (main upload) + `_inbox/<id>/<id>_words.json` (words layer, the default).
+4. `python3.13 -m streamlit run app.py` → upload the raw JSON and the words file (without it the app
+   warns «No OCR words layer — fallback mode»)
    → review the tabs (balance / DRE / DFC / **SBS fields**) → download the Excel.
    The app serves on `localhost` only (`.streamlit/config.toml`).
 
 For an independent check of several PDFs, see `AUDIT_BRIEF.md` + `harness/audit_run.py`.
 
-### 5.5 OPTIONAL — recover lost figures from the OCR words layer
+### 5.5 The OCR words layer — on by default (recovers the figures the extraction lost)
 
 ```bash
-python3.13 structure_ocr.py my_doc.json -o my_doc_output.json --words my_doc_words.json
+python3.13 structure_ocr.py my_doc_raw.json -o my_doc_output.json                       # my_doc_words.json next to it is used
+python3.13 structure_ocr.py my_doc.json -o my_doc_output.json --words other_words.json  # explicit file
+python3.13 structure_ocr.py my_doc.json -o my_doc_output.json --no-words                # fallback, no words
 ```
 
-`my_doc_words.json` = the reciTAL words layer (`GET /files/{id}/words/`, a list per page of
-`{word, coordinates}`). Recovered cells / lines / labels carry `source` / `label_source: "ocr_words"`
-(report block `words`) and are shown italic on light yellow in the Excel. Without `--words` the output is
-the words-free one exactly — production may not receive that layer. See `docs/Words_Recovery.md`.
+The words layer = reciTAL `GET /files/{id}/words/` (a list per page of `{word, coordinates}`; in production
+`/production/files/{id}/words/`, confirmed by reciTAL 2026-11-05). User decision 2026-11-12: it is used by
+default. The CLI looks for `<name>_words.json` next to the input (`<id>_raw.json` → `<id>_words.json`, the
+pair `recital_fetch.py export` writes) and prints which layer it used («Слой OCR words: …») or that it runs
+the fallback. Recovered cells / lines / labels carry `source` / `label_source: "ocr_words"` (report block
+`words`) and are shown italic on light yellow in the Excel. Without the layer the output is the words-free
+one exactly (the fallback). In production the words must be fetched right after the extraction (status
+`to_verify`): reciTAL deletes them with the other results after validation. See `docs/Words_Recovery.md`.
 
 ### 5.6 Read-only diagnostics (the structured result is not touched)
 
@@ -392,7 +399,7 @@ for stmt, rows in out["statements"].items():
 
 ### 6.3 Reference-sample expected result (sanity baseline)
 
-`comprehansive_sample.json`, current code, production mode (no words layer):
+`comprehansive_sample.json`, current code, words-free (the local sample comes without its words layer):
 
 | Metric | Expected value |
 |---|---|
@@ -406,7 +413,7 @@ for stmt, rows in out["statements"].items():
 ### 6.4 `<output>_report.json` — quality counters
 
 Key blocks: `rows`, `columns`, `only_amount`, `account_type`, `code_value`, `classification`, `sbs`,
-`words` (optional layer), plus `document_type` / `number_format`. The **conservation invariant** to
+`words` (the words layer, when it was there), plus `document_type` / `number_format`. The **conservation invariant** to
 check: `columns.total` equals the unique in-scope amount count (3,677 on the sample) — see Stage-1 doc §9.
 
 Counters worth a look: `columns.dc_suffix_signed` (debit / credit suffixes), `columns.sign_corrected` /
@@ -623,8 +630,9 @@ python3.13 -m streamlit run app.py --server.headless true --server.port 8501   #
 
 - **Auto-detects the upload.** Root is a `list` → raw OCR, runs `structure_ocr.process()` (Stages 1-3);
   root is a `dict` with a `statements` key → a structured output, used as-is.
-- **Optional words layer.** A second uploader takes the reciTAL words JSON (`<id>_words.json`); figures /
+- **Words layer (default).** A second uploader takes the reciTAL words JSON (`<id>_words.json`); figures /
   lines / labels recovered from it are marked like in the workbook (WORDS badge, italic on light yellow).
+  A raw upload without it shows the warning «No OCR words layer — fallback mode».
 - **Screen == Excel.** Which rows appear is decided by `export_excel.passing_rows` (=
   `selection.passing_rows`), which figures by `pick_cells` / `consolidado_filter`, and the **Download
   Excel** button calls `export_excel.build_workbook` directly — so the downloaded `.xlsx` is
@@ -699,7 +707,7 @@ symptom comes back, the rule named in the Fix column is the place to look (step 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `UnicodeEncodeError` / garbled `?` in console | Windows console is cp1252 | Cosmetic only — the **files** are valid UTF-8. The scripts already force UTF-8 stdout; ignore console rendering. |
-| `structured_output.json` (a golden) changed after a run | `structure_ocr.py` without `-o` writes to `structured_output.json` | The goldens are not in git (`*.json` is git-ignored) — there is no copy to restore. Always pass `-o` with a new name (§1). |
+| `structured_output.json` (a golden) changed after a run | A run with an explicit `-o structured_output*.json` (since 2026-11-12 a run without `-o` writes `<input>_structured.json` next to the input — before, it wrote the golden) | The goldens are not in git (`*.json` is git-ignored) — there is no copy to restore; regenerate a golden only after showing its diff (§1). |
 | `FileNotFoundError: anchors.yaml` running `diagnose_pages.py` | Run from wrong directory (it uses a relative path) | `cd` into the project directory first. |
 | `[fuzzy backend: difflib]` unexpectedly | `rapidfuzz` not importable | Reinstall via proxy (§2); harmless otherwise. |
 | `ModuleNotFoundError: openpyxl` running `export_excel.py` / `build_sbs_mapping.py` | Dependency missing | Install `openpyxl` via proxy (§2). |
@@ -735,10 +743,10 @@ symptom comes back, the rule named in the Fix column is the place to look (step 
 | A figure sits on the neighbour line / a row shows the figures of the line above | Provider bound the name to the wrong line, or the old fixed 0.012 tolerance | Fixed 2026-11 (Stage-1 Steps 1b + page-pitch tolerance). Check `only_amount.lst_detached` / `lst_rebound_*` in the report; harness metric `offln`. |
 | A value appears in the wrong year column | Provider period tag wrong in rows with empty cells; single-value ONLY_AMOUNT always tagged `AMOUNT_N` | Fixed 2026-11 (Step 2c, column grid wins): such cells carry `period_corrected` + `period_src`; harness metric `perGr`. |
 | A Consolidado cell shows the Controladora figure of the other year (Cibra p7: TOTAL DO PASSIVO E PL 2024 = 2.433.930 = Contr. 2023), or a Conso 2024 figure sits in the 2023 column | An `ONLY_AMOUNT` pair jumped an empty column, or agent 6051 tagged a Conso 2024 single `N-1`. Step 2c and the pair rule then mis-place the figure | Fixed 2026-11-05 (step 2c', header zones): where `CLOSING_DATE` + `ACCOUNT_TYPE` frames make the header unambiguous, the column's zone decides. Look for `period_src` / `account_type_src` on the cell, `_match: "zone"` with `--debug`, report `only_amount.zone_panels`. No zone on the page: see the next row. |
-| The header is printed but no zone is built (in the `--debug` output no cell of the page has `_match: "zone"`) | Not unambiguous: a perspective header in the form title (ITR), no type header at all (2-col, Serasa), two tables on the page, a stray column (DEL10), a date frame centred over a wide column (MBP p14) | By design: Step 2c and the pair rule stand there. The reason per page and panel is the `status` that `structure_ocr.build_header_zones` returns (`no_type_header`, `ncols_mismatch`, `type_header_inside_table`, `header_not_over_pair`, `pair_dates`, `n_right_of_n1`, …). The conditions are in Stage-1 doc §6, Step 2c'. |
+| The header is printed but no zone is built (in the `--debug` output no cell of the page has `_match: "zone"`) | Not unambiguous: a perspective header in the form title (ITR), no type header at all (2-col, Serasa), two tables on the page, a date frame centred over a wide column (MBP p14) | By design: Step 2c and the pair rule stand there. The reason per page and panel is the `status` that `structure_ocr.build_header_zones` returns (`no_type_header`, `ncols_mismatch`, `type_header_inside_table`, `header_not_over_pair`, `pair_dates`, `n_right_of_n1`, …). The conditions are in Stage-1 doc §6, Step 2c'. |
 | A balance N-1 taken from an «01/01/…» opening column | Three-column restated balance | Fixed 2026-11-04 (step 2d): proven by the other balance side; the extra column becomes `AMOUNT_N-2`. |
 | A figure shown without its minus / a «1» where the page has a dash | OCR lost the sign / read the dash | Repaired only when proven (step 5b, `sign_corrected` / `dash_corrected`, `value_raw`, `proof`); on the income statement only the dash is repaired (since 2026-11-05), never a sign; else an ITR parent may carry `arith_review`. |
-| A figure is visible on the PDF but absent from the output | The extraction lost it (~8% of table figures) | With the words layer: `--words` (§5.5). Without it: not recoverable — check `harness` metric `missW`. |
+| A figure is visible on the PDF but absent from the output | The extraction lost it (~8% of table figures) | The words layer (default, §5.5) recovers it — check it was used (the CLI line «Слой OCR words: …», the Streamlit warning). In the fallback (no layer): not recoverable — `harness` metric `missW`. |
 | Closing date shows only a year, or the comparative year | Provider's `CLOSING_DATE` token | `metadata.CLOSING_DATE.normalized` (from DURATION) is shown with `(OCR: …)`; check `normalized_from`. |
 
 ### 12.4 SBS labels and `sbs_fields` — Stage 3
@@ -756,7 +764,7 @@ symptom comes back, the rule named in the Fix column is the place to look (step 
 | Income tax = the pre-tax figures, `pretaxProfitAmount` empty, the DRE label is a fragment («DA CONTRIBUIÇÃO SOCIAL») | A wrapped ALL-CAPS pre-tax caption («… IMPOSTO DE RENDA E» / «DA CONTRIBUIÇÃO SOCIAL») left unmerged | Fixed 2026-11-05: wrap type C (Stage 1 step 4b). A new variant that still fails: check `label_parts` / `label_wrapped` of the row. |
 | `provisions` empty although the balance prints a «Provisões…» line | The caption does not say what it provides for (bare «Provisões», «Outras provisões», «Provisões diversas») or is a payroll / tax accrual | By design (user decision 2026-11-05): only IAS 37 captions. A real IAS 37 caption missing → add it to `provisions` in `EXTRA_ALIASES`, rebuild (§8). The cash-flow «Provisões para riscos…» is never the balance provision (strict scope). |
 | `totalCurrentAssetsAmount` ≠ the printed «Total do ativo circulante» (method `held_for_sale+identity`) | An «Ativo mantido para venda» line printed outside both subtotals | By design (user decision 2026-11-05): held-for-sale assets are current; taken only where total assets prove it. |
-| An accounting check ✗ in `sbs_fields` | A figure lost by the extraction, a mislabelled line, or a field the lexicon misses | Harness metric `idBad`; with the words layer most losses come back (`--words`). Every field of the failing identity carries `needs_review` + `review_reason`. |
+| An accounting check ✗ in `sbs_fields` | A figure lost by the extraction, a mislabelled line, or a field the lexicon misses | Harness metric `idBad`; with the words layer (default — check it was used) most losses come back. Every field of the failing identity carries `needs_review` + `review_reason`. |
 
 ### 12.5 Development and the harness
 
@@ -795,18 +803,20 @@ python3.13 sbs_labeler.py my_output.json               # write in place (never o
 # --- regenerate the SBS mapping ------------------------------------------
 python3.13 build_sbs_mapping.py
 
-# --- OPTIONAL: + recovery from the OCR words layer ------------------------
+# --- words layer: automatic (<id>_words.json next to the input), explicit, or off ---
+python3.13 structure_ocr.py my_doc_raw.json -o my_doc_output.json                      # uses my_doc_words.json
 python3.13 structure_ocr.py my_doc.json -o my_doc_output.json --words my_doc_words.json
+python3.13 structure_ocr.py my_doc.json -o my_doc_output.json --no-words               # fallback
 
 # --- regression harness (22 reciTAL PDFs; both modes) ----------------------
-python3.13 -E -P harness/run.py snapshot base_p && python3.13 -E -P harness/run.py snapshot base_w --words
-python3.13 -E -P harness/run.py diff base_p base_w -v
+python3.13 -E -P harness/run.py snapshot base_w && python3.13 -E -P harness/run.py snapshot base_n --no-words
+python3.13 -E -P harness/run.py diff base_n base_w -v
 python3.13 -E -P harness/run.py goldens
 python3.13 -E -P harness/run.py selftest
 
 # --- new PDF from reciTAL (READ-ONLY) / independent audit ------------------
 python3.13 -E -P harness/recital_fetch.py files 5485 20
-python3.13 -E -P harness/recital_fetch.py export <file_id>          # -> _inbox/<id>/<id>_raw.json (+ _words.json)
+python3.13 -E -P harness/recital_fetch.py export <file_id>          # -> _inbox/<id>/<id>_raw.json + _words.json
 python3.13 -E -P harness/audit_run.py <file_id> [...] --all-pages   # -> _audit/<id>/ (see AUDIT_BRIEF.md)
 
 # --- debug (keep coordinates) --------------------------------------------

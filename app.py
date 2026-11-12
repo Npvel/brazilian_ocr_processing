@@ -616,9 +616,11 @@ def sidebar():
             help="Raw OCR provider JSON (root = list) or a structured output "
                  "(root = dict with 'statements').")
         words_up = st.file_uploader(
-            "OCR words layer (optional) · camada words (opcional)", type=["json"],
-            help="Optional reciTAL words layer (GET /files/{id}/words/). When given, figures, "
-                 "lines and labels the extraction lost are recovered from it and marked.")
+            "OCR words layer · camada words", type=["json"],
+            help="reciTAL words layer (GET /files/{id}/words/, the <id>_words.json of "
+                 "recital_fetch.py export) — used by default: figures, lines and labels the "
+                 "extraction lost are recovered from it and marked. Without it the app runs in "
+                 "fallback mode (only what the extraction returned).")
         return up, words_up
 
 
@@ -701,8 +703,14 @@ def main():
     sidebar_summary(output, report, mode, doc_type, kpis, up.name)
 
     # Document-level metadata card, on top of the tables (one card for all tabs).
-    st.markdown(f'<div class="src-line">Source · fonte: <b>{esc(up.name)}</b></div>',
+    words_note = f' · OCR words: <b>{esc(words_up.name)}</b>' if words_up is not None else ''
+    st.markdown(f'<div class="src-line">Source · fonte: <b>{esc(up.name)}</b>{words_note}</div>',
                 unsafe_allow_html=True)
+    if mode == "raw" and words_up is None:
+        # the words layer is the default input since 2026-11-12: without it, say so plainly
+        st.warning("No OCR words layer — fallback mode: figures, lines and labels the extraction "
+                   "lost are not recovered. Upload `<id>_words.json` for the default mode. · "
+                   "Sem camada words — modo reduzido: o que a extração perdeu não é recuperado.")
     st.markdown(metadata_ribbon(metadata, doc_type), unsafe_allow_html=True)
 
     tabs = st.tabs([t[1] for t in TABS] + ["SBS fields · Campos SBS"])

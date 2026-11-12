@@ -1,4 +1,4 @@
-# OCR Words Recovery (optional step)
+# OCR Words Recovery (on by default)
 
 **Recovering what the provider extraction lost, from the reciTAL OCR words layer**
 
@@ -7,7 +7,7 @@
 | **Component** | `words_recovery.py` (called by `structure_ocr.process(data, words=...)`) |
 | **Input** | the Stage-1 rows + the reciTAL words layer (`GET /files/{id}/words/`: every word of every page with its box) |
 | **Output** | the same structured JSON, with recovered cells / lines / labels flagged `source` / `label_source: "ocr_words"` |
-| **Status** | OPTIONAL. Production may not receive the words layer (asked to reciTAL, 2026-11-04). |
+| **Status** | **ON by default** (user decision 2026-11-12), pluggable: without the layer the pipeline runs the words-free fallback, exactly. reciTAL confirmed the layer in production on 2026-11-05 (§2a). |
 | **Related** | [`OCR_Table_Reconstruction.md`](OCR_Table_Reconstruction.md) (Stage 1), [`SBS_Labelling.md`](SBS_Labelling.md) |
 
 ---
@@ -26,19 +26,33 @@ layer has every one of them, with boxes **identical** to the extracted value box
 | **COLUMN** of a continued page | Serasa 92644954 p4: the DRE tail kept only 2023, the 2024 column (net income 3.213) is in the words only | latest-year figures missing |
 | **METADATA** | Serasa: the period length only in «Observações» («A DEMONSTRACAO DE RESULTADOS COMPREENDE 09 MES(ES)») | DURATION empty |
 
-## 2. Pluggable by design (user decision 2026-11-04)
+## 2. On by default, pluggable by design (user decisions 2026-11-12 / 2026-11-04)
 
-Nothing in the pipeline depends on the step:
+Nothing in the pipeline depends on the step — the layer can still be missing (fetch failed, already
+deleted after validation), and then the fallback is the words-free output, exactly:
 
 | Call | Result |
 |---|---|
-| `structure_ocr.process(data)` (production today) | the step never runs; output exactly the words-free one |
-| `structure_ocr.process(data, words=words)` | the step runs once, at the end of Stage 1 (after the wrapped-label merge, before the Serasa zone and Stage 2/3) |
+| `structure_ocr.process(data, words=words)` (**production mode**) | the step runs once, at the end of Stage 1 (after the wrapped-label merge, before the Serasa zone and Stage 2/3) |
+| `structure_ocr.process(data)` (fallback: no layer) | the step never runs; output exactly the words-free one |
 | `words=[]`, or `words_recovery.py` deleted | words-free output (guarded import) |
 
-`harness/run.py selftest` asserts the three equalities. Enable it with
-`python3.13 structure_ocr.py <in.json> -o <out.json> --words <words.json>`, the optional second upload in
-the Streamlit app, or `harness/run.py snapshot <tag> --words`.
+`harness/run.py selftest` asserts the three equalities. The entry points use the layer by default:
+`python3.13 structure_ocr.py <id>_raw.json -o <out.json>` takes `<id>_words.json` from the same folder
+(`--words <file>` names another one, `--no-words` runs the fallback); the Streamlit app takes it as the
+second upload and warns when it is missing; `harness/run.py snapshot <tag>` runs with it (`--no-words` =
+the fallback); `harness/audit_run.py` writes both (`out_words` = production, `out_nowords` = fallback).
+
+### 2a. In production (reciTAL, Jiaqi Chang, 2026-11-05)
+
+| Question | reciTAL's answer | What it means for the integration |
+|---|---|---|
+| `GET /production/files/{id}/words/` for every file? | Yes | fetch it for every file, with values / groups |
+| Deletion (`post_processing_deletion` is on)? | The words are deleted with the other results, after validation in the review screen | fetch them right after the extraction (status `to_verify`), before any validation — or disable the automatic deletion and delete the document by API at the end |
+| In the callback? Limits? | Not in the callback: one extra call per file; only the whole file for now (per-page retrieval = a reciTAL ticket); rate limits not a concern | one GET per file: ≈ 61 KB a page on the corpus (up to 77), a 175-page report = 12.3 MB |
+| Same coordinates as values / groups? | Yes (normalized 0-1, same page numbering) | nothing to convert (checked on the corpus: word boxes = value boxes) |
+
+If the GET fails or returns nothing, call `process(data)` — the fallback — rather than failing the file.
 
 ## 3. What it does
 
@@ -122,5 +136,5 @@ Serasa 92644954 p4 (2024 column of the DRE tail: net income 3.213), RECONTEC / R
 
 ## 7. Removing it
 
-Delete `words_recovery.py`. `structure_ocr` imports it under `try` and skips the step; the CLI `--words`
-flag then only records `report["words"] = {"skipped_no_module": 1}`.
+Delete `words_recovery.py`. `structure_ocr` imports it under `try` and skips the step; a words layer given
+(automatically or with `--words`) then only records `report["words"] = {"skipped_no_module": 1}`.

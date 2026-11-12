@@ -206,7 +206,7 @@ so adding a new pair needs no code change. Today there are two:
 
 | Group | Current twin | Non-current twin | Shared captions (examples) |
 |---|---|---|---|
-| **debt** (credits and loans) | `shortTermLiabilitiesAmount` | `longTermLiabilitiesAmount` | `empréstimos e financiamentos`, `debêntures`, `títulos emitidos`, `bancos com empréstimos`, `empréstimos e outras obrigações`, `empréstimos sócios / clientes`, `mútuos sócios` |
+| **debt** (credits and loans) | `shortTermLiabilitiesAmount` | `longTermLiabilitiesAmount` | `empréstimos e financiamentos`, `empréstimos, financiamentos e debêntures` (ALUBAR p6, 2026-11-12), `debêntures`, `títulos emitidos`, `bancos com empréstimos`, `empréstimos e outras obrigações`, `empréstimos sócios / clientes`, `mútuos sócios` (títulos emitidos and the shareholder loans confirmed as loans by the user 2026-11-12, P11a) |
 | **securities** | `cashAndSecuritiesAmount` | `financialAssetsAmount` | `títulos e valores mobiliários`, `aplicações financeiras`, `investimentos`, `tot investimentos` (Serasa), `aplicações financeiras avaliadas a valor justo através do resultado` (CVM 1.0x.0x.01) |
 
 A new loan / securities caption must be added to the field's aliases (`EXTRA_ALIASES`) **and** to the

@@ -166,7 +166,7 @@ def is_per_share(row):
 
 
 def is_recovered(item):
-    """A cell / row / label recovered from the OCR words layer (optional words_recovery step)."""
+    """A cell / row / label recovered from the OCR words layer (words_recovery step, on by default)."""
     return bool(item) and (item.get("source") == "ocr_words" or item.get("label_source") == "ocr_words")
 
 

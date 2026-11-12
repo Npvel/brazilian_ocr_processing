@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-words_recovery.py — OPTIONAL Stage-1 add-on: recover what the reciTAL extraction lost, from the
-OCR words layer (`GET /files/{id}/words/`: every recognized word of every page + its box).
+words_recovery.py — Stage-1 add-on, ON by default (user decision 2026-11-12): recover what the reciTAL
+extraction lost, from the OCR words layer (`GET /files/{id}/words/`: every recognized word of every
+page + its box; reciTAL confirmed `/production/files/{id}/words/` on 2026-11-05).
 
-Pluggable by design (user decision 2026-11-04). Production may NOT receive the words layer, so
-nothing in the pipeline depends on this module:
+Pluggable by design (user decision 2026-11-04). The layer can still be missing (fetch failed, already
+deleted after validation), so nothing in the pipeline depends on this module:
     * structure_ocr.process(data)              -> this module is never called; output unchanged
     * structure_ocr.process(data, words=words) -> recover(...) runs once, at the end of Stage 1
     * delete this file                         -> structure_ocr's guarded import turns it off

@@ -55,8 +55,9 @@ def load(fid):
 
 
 def run(fid, use_words=False):
-    """Pipeline on one corpus file. use_words=False = PRODUCTION mode (no words layer: the words
-    are loaded only for the metrics); True = the optional words_recovery step is on."""
+    """Pipeline on one corpus file. use_words=True = production mode (the OCR words layer is on —
+    the default of `run.py snapshot` since 2026-11-12); False = the words-free fallback (the words
+    are then loaded only for the metrics). The argument default stays False for the existing callers."""
     data, words, meta = load(fid)
     out, rep = S.process(data, keep_debug=True, words=words if use_words else None)
     return data, words, meta, out, rep

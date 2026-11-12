@@ -44,21 +44,28 @@ structured, **page-classified**, **SBS-labelled** JSON. Three stages:
 `structure_ocr.py` runs Stages 1-3 and embeds Stage-2/3 results into its output. `export_excel.py`
 is a separate Stage-4 step over that output.
 
-- **OPTIONAL — OCR words recovery** (`words_recovery.py`, `docs/Words_Recovery.md`): when the reciTAL
-  words layer (`GET /files/{id}/words/`) is supplied, figures / lines / labels the extraction lost
-  (~8% of the table figures) are recovered from it, flagged `source` / `label_source: "ocr_words"`.
-  ⚠️ **Production may NOT have the words layer** (asked to reciTAL 2026-11-04; their answer proposed the
-  agent-6051 configuration instead and did not confirm words in production — our reply, «6051 accepted,
-  words still needed», was drafted 2026-11-05): the pipeline must keep working without it —
-  `process(data)` never calls the module, `words=[]` or a deleted module give the words-free output
-  exactly (`harness/run.py selftest` asserts it). Never make a Stage depend on it.
+- **OCR words recovery — ON by default** (`words_recovery.py`, `docs/Words_Recovery.md`; user decision
+  2026-11-12): the reciTAL words layer (`GET /files/{id}/words/`) is part of the normal input; figures /
+  lines / labels the extraction lost (~8% of the table figures) are recovered from it, flagged `source` /
+  `label_source: "ocr_words"`. **reciTAL confirmed 2026-11-05** (Jiaqi Chang): `GET
+  /production/files/{id}/words/` exists for every file, in the coordinates of values / groups; the words
+  are deleted with the other results after validation in the review screen → the integration fetches them
+  right after the extraction (status `to_verify`), before any validation (or disables the automatic
+  deletion and deletes the document by API at the end); they are not in the callback → one extra GET per
+  file, whole file only (≈ 61 KB a page, 175 pages = 12.3 MB; per-page retrieval = a reciTAL ticket).
+  ⚠️ The layer can still be missing (fetch failed, already deleted): the pipeline must keep working
+  without it — `process(data)` never calls the module, `words=[]` or a deleted module give the words-free
+  output exactly (`harness/run.py selftest` asserts it). Never make a Stage depend on it.
 
 ## Run it
 
 ```bash
 cd /c/Users/4885523/projects_with_claude/br_ocr_json_processing
-python3.13 structure_ocr.py <input.json> -o <output.json>      # full pipeline (Stage 1+2+3)
-python3.13 structure_ocr.py <in.json> -o <out.json> --words <words.json>  # + OPTIONAL words recovery
+python3.13 structure_ocr.py <input.json> -o <output.json>      # full pipeline (Stage 1+2+3); the words layer
+                                                                # <id>_words.json next to <id>_raw.json is used
+                                                                # automatically (<name>.json -> <name>_words.json)
+python3.13 structure_ocr.py <in.json> -o <out.json> --words <words.json>  # explicit words layer
+python3.13 structure_ocr.py <in.json> -o <out.json> --no-words # words-free fallback
 python3.13 sbs_labeler.py <structured_output.json> --dry-run    # Stage-3 only, report (no write)
 python3.13 sbs_labeler.py <structured_output.json> -o <out>     # Stage-3 only, post-process
 python3.13 export_excel.py <structured_output.json> -o <x.xlsx> # Stage-4 Allianz Excel export
@@ -69,7 +76,8 @@ python3.13 -m streamlit run app.py                              # web UI (upload
 **New PDF end to end (reciTAL → Streamlit):** upload the PDF in the reciTAL web UI (agent
 `Brazil_OCR202606_V4`, doctype 5485) → `python3.13 -E -P harness/recital_fetch.py files 5485 20` (status
 `to_verify` = extraction done) → `python3.13 -E -P harness/recital_fetch.py export <file_id>` →
-upload `_inbox/<id>/<id>_raw.json` (+ optionally `<id>_words.json`) in the app. READ-ONLY on reciTAL.
+upload `_inbox/<id>/<id>_raw.json` + `<id>_words.json` in the app (without the words file the app warns
+and runs the fallback). READ-ONLY on reciTAL.
 
 **Agent 6051 `Brazil_OCR202606_V4 copy reciTAL`** (created by reciTAL 2026-11-04): agent 5485 with
 `AMOUNT_N-1` also a primary label of the group ONLY_AMOUNT — every figure comes in its OWN subgroup
@@ -78,8 +86,8 @@ Consolidado figures 92 % vs 77 %); chosen for production by the user 2026-11-05.
 both shapes; their period traps differ (#14, #31). List its files with `recital_fetch.py files 6051 20`.
 
 **Independent audit (separate session):** brief = `AUDIT_BRIEF.md`; runner
-`python3.13 -E -P harness/audit_run.py <file_id> ...` → `_audit/<id>/` (both modes, Excel, page images,
-summary). `_recital/` = harness corpus (22 files of `ground_truth.yaml`), `_inbox/` / `_audit/` = new
+`python3.13 -E -P harness/audit_run.py <file_id> ...` → `_audit/<id>/` (both modes: `out_words` = production,
+`out_nowords` = fallback — `out_prod` in folders made before 2026-11-12; Excel, page images, summary). `_recital/` = harness corpus (22 files of `ground_truth.yaml`), `_inbox/` / `_audit/` = new
 documents; all git-ignored (confidential).
 
 Full operational detail (scenarios, troubleshooting, reading outputs): **`RUNBOOK.md`**.
@@ -87,8 +95,9 @@ Full operational detail (scenarios, troubleshooting, reading outputs): **`RUNBOO
 **Regression harness (run before AND after any change to Stages 1-4):**
 
 ```bash
-python3.13 -E -P harness/run.py snapshot <tag>        # 22 reciTAL PDFs (_recital/) -> scoreboard
-python3.13 -E -P harness/run.py snapshot <tag> --words  # same, OCR-words recovery ON (compare both modes)
+python3.13 -E -P harness/run.py snapshot <tag>        # 22 reciTAL PDFs (_recital/), production mode
+                                                      # (words layer ON) -> scoreboard
+python3.13 -E -P harness/run.py snapshot <tag> --no-words  # same, words-free fallback (compare both modes)
 python3.13 -E -P harness/run.py diff <tagA> <tagB> -v  # cell-level + Excel-level differences
 python3.13 -E -P harness/run.py goldens                # the 8 local structured_output*.json in sync?
 python3.13 -E -P harness/run.py selftest               # company-only rule + words step pluggability
@@ -107,7 +116,7 @@ confidential data (git-ignored `*.json`).
 | File | Role | Run directly? |
 |---|---|---|
 | `structure_ocr.py` | **Entry point** — Stage 1 + Stage 2 + Stage 3; computes `document_type`; header zones (step 2c', #31) | Yes (CLI) |
-| `words_recovery.py` | **OPTIONAL** Stage-1 add-on — recovery from the OCR words layer (cells / lines / labels / Serasa DURATION); its column grid also takes the header-zone columns (#31); deletable | No (`structure_ocr.py --words`) |
+| `words_recovery.py` | Stage-1 add-on, **ON by default** (2026-11-12) — recovery from the OCR words layer (cells / lines / labels / Serasa DURATION); its column grid also takes the header-zone columns (#31); pluggable, deletable | No (`structure_ocr.py`: `<id>_words.json` automatic, `--words`, `--no-words`) |
 | `sign_proof.py` | Stage-1 step 5b — lost minus / dash read as «1» repaired ONLY where the CVM code tree or a printed subtotal proves it (`sign_corrected` / `dash_corrected`, `value_raw`, `proof`); the income statement gets the dash test only, never a sign flip (#26); stdlib only | No (library) |
 | `sbs_fields.py` | Stage-3 end — ONE value per SBS field and period, identity-proven, hierarchy-aware (`sbs_fields` key, Excel sheet `sbs_fields`) | No (library) |
 | `selection.py` | **Shared** — which rows / figures the export shows (`passing_rows`, `pick_cells`, `consolidado_filter`, ITR `form_pages`, `is_per_share`) and why a row is flagged (`review_reason`, the «Review» column); stdlib only, used by Excel, Streamlit, harness, `sbs_fields` | No (library) |
@@ -152,6 +161,9 @@ confidential data (git-ignored `*.json`).
 | `serasa_report_2.json` | `structured_output_serasa2.json` → `serasa_report_2.xlsx` | SERASA Experian, balance **split across p3/p4/p5** | export type **SERASA**; the page-split case — both `EMPREST E FINANCIAMENTOS` → ST/LT positional only because sections are computed bucket-wide |
 
 Each run also writes `<output>_report.json`. `export_excel.py` writes `<output>_report.xlsx`.
+Without `-o`, `structure_ocr.py` writes `<input>_structured.json` next to the input (`<id>_raw.json` →
+`<id>_structured.json`); a golden is written only with an explicit `-o` (since 2026-11-12 — the old default
+`structured_output.json` silently overwrote the main golden).
 `page_diagnostics.json` comes from `diagnose_pages.py`.
 
 ## ⚠️ Sensitive details — get these wrong and results break
@@ -232,6 +244,12 @@ Each run also writes `<output>_report.json`. `export_excel.py` writes `<output>_
     with `BALANCE_*` rows) → overlapping bands rejected the right row of the line. Orphans route by
     panel + the named row ABOVE (a subtotal closes the block above). Panels are found on exactly the 6
     side-by-side balance pages of the 22-PDF corpus (a `Comprado/Vendido` value column is NOT a panel).
+    ⚠️ A FIGURE takes the panel of its centre WITHOUT margin (`panel_of`); only NAMES keep the 0.01
+    margin (`NAME_PANEL_MARGIN`: `build_panels`, `row_panel`). With the margin the short figures of the
+    left panel's last column, which end right before the next panel's names, fell into the right panel
+    (Delfia p5 58 / 371 / 933 → wrong N-1 of two liability lines + an unnamed row, and the word «69» →
+    «Fornecedores» N-1 — audit DEL10, fixed 2026-11-12; the panel's zones now switch on too). On the 36
+    documents only these figures change panel; right-panel figures stand ≥ 0.074 right of the names edge.
 
 12. **"Same line" tolerance comes from the PAGE's line pitch, never a constant.** Same-line spread p99
     ≤ 0.0017; pitch goes down to 0.0079 (Raízen p26 primary cash flow). The old 0.012/0.010 exceeded one
@@ -372,7 +390,11 @@ Each run also writes `<output>_report.json`. `export_excel.py` writes `<output>_
     identities read `assets = financialLiabilitiesShortTerm + financialLiabilitiesLongTerm + equity`,
     `totalLiabilities = financialLiabilitiesShortTerm + financialLiabilitiesLongTerm`. A loan caption
     is a twin (current / non-current by qualifier → code → section): add new loan captions to BOTH the
-    `shortTermLiabilitiesAmount` aliases and the `debt` shared list.
+    `shortTermLiabilitiesAmount` aliases and the `debt` shared list — a caption missing from the shared
+    list is taken as short-term whatever its section (ALUBAR p6 «Empréstimos, financiamentos e
+    debêntures» non-current 453.170 / 733.788 counted as ST: ST = ST + LT, LT empty — fixed 2026-11-12,
+    the only such line on the corpus). **TITULOS EMITIDOS and mútuos / empréstimos de sócios ARE loans —
+    confirmed by the user 2026-11-12 (audit P11a)**; «Partes relacionadas» is not (#32).
 
 22. **ITR: only the CVM FORM pages are exported** (`selection.form_pages`, audit P1). Every line of a
     CVM form carries its account code; note / commentary pages carry none (WEG 160/160 primary rows
@@ -515,7 +537,7 @@ Each run also writes `<output>_report.json`. `export_excel.py` writes `<output>_
     - debug `_match: "zone"`;
     - report `only_amount.zone_panels` / `zone_period_set`, `account_type.zone` / `zone_type_changed`.
 
-    The optional words step gets the zone columns in its grid: a column the header prints is a column
+    The words step (on by default) gets the zone columns in its grid: a column the header prints is a column
     even with 1–2 extracted figures (Cibra p7 Conso 2024 → 188/188 Consolidado cells with words).
     ⚠️ Zones never depend on words. ⚠️ Rejected in the simulation: S2 «every LST figure votes + 6051
     singles vote» — golden −3 (Raízen p26), 69 wrong vs 43 right changes, K2 back on 6051.
@@ -872,6 +894,18 @@ dates the metadata proves (`period_labels`), figures with decimals keep them, pe
   code tree / a printed subtotal (#26 — Moreno p5, Raízen p21, Entrepay p9, Delfia p5, São Salvador
   Controladora dashes), since 2026-11-05 on the income statement too, dash test only (Cibra p8, Romagnole
   p8, MBP p11). An unproven «1» stays a figure.
+- **Dash-only lines are not exported — user decision 2026-11-12 (audit D7: keep it so).** reciTAL returns
+  no token for a printed «–» (the words layer has none either), so a line printed with dashes only is a
+  name without figures: it is not in the Excel and its SBS field stays EMPTY, not 0 (DIMENSIONAL: loans
+  CP / LP printed «–»). A figure-less line cannot be told safely from a heading, and a false 0 is worse
+  than an empty field. Where an identity proves a block empty, `sbs_fields` already gives 0
+  (`zero_by_identity`, #20).
+- **The `proof` text of a sign / dash repair can differ between runs** (found 2026-11-12, not fixed):
+  `sign_proof._equations` walks a `set` of codes, so the equation order follows Python's per-process
+  string hash; when two equations prove the same flip, the one recorded in `proof` varies (WEG 6.01.02:
+  «6.01 = Σ 6.01.xx» / «6.01.02 = Σ 6.01.02.xx»). The value and `sign_corrected` are the same; in
+  principle the order could also pick a different flip. Fix: iterate `sorted(codes)`; may change the
+  proof texts of the goldens (Eztec) → show the diff first.
 - **Agent 6051 outside the header zones — not measured yet.** On TWO_COL / ITR / SERASA / UPPERCASE pages
   the zones (#31) do not switch on, and step 2c gives no vote to the 6051 singles (`oa_single`), so a 6051
   period mis-tag there (Cibra p11 had 7 before the zones) would stay uncorrected. Before production on
@@ -880,16 +914,10 @@ dates the metadata proves (`period_labels`), figures with decimals keep them, pe
 - **Extraction gap reported to reciTAL (2026-11-05):** on a side-by-side balance with 8 figure columns
   (Cibra p7) the Consolidado 2024 column of the right panel is lost by both agents (5485: 16 of 17, 6051:
   15 of 17); only the words layer recovers it (the zone columns in the words grid, #31).
-- **Panel boundary of short figures (latent, audit DEL10).** Figures are assigned to a panel by their
-  centre x with a 0.01 margin before the next panel's names (`_panel_index`); the short numbers of the left
-  panel's LAST column can fall into the right panel (Delfia p5 Consolidado 2022: 58 / 371 / 933 → wrong
-  N-1 of «Provisões para férias» / «Passivo de arrendamento», an extra unnamed row). Fix idea: use the
-  figure's right edge (x_max) against the next panel's name edge. Not done yet.
 - Figures the extraction lost (Delfia p5/p9 Consolidado cells, p6 revenue N-1 — DEL6/DEL11) are only
   recoverable with the words layer. A non-figure token («C» for 0, Serasa S2) stays an empty cell.
 - **Header-zone coverage gaps (#31)** — the previous behaviour (step 2c + pair rule) stands there:
   - MBP p14: a year frame centred over a wide column; Contr N read «2.024»;
-  - Delfia p5 right panel: 5 columns because of DEL10;
   - Delfia p6: no date frames over Consolidado — only the Controladora pair is zoned;
   - note pages with two tables or a table continued from the previous page (`type_header_inside_table`).
 

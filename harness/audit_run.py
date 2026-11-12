@@ -6,8 +6,11 @@
 Per file, into _audit/<file_id>/ (confidential data, git-ignored):
     file.json values.json groups.json words.json   reciTAL extraction (READ-ONLY GETs)
     <id>_raw.json / <id>_words.json                the two uploads of the Streamlit app
-    out_prod.json  report_prod.xlsx                pipeline WITHOUT the words layer (production today)
-    out_words.json report_words.xlsx               pipeline WITH the optional words recovery
+    out_words.json   report_words.xlsx             pipeline WITH the OCR words layer (production mode,
+                                                   the default since 2026-11-12)
+    out_nowords.json report_nowords.xlsx           pipeline WITHOUT it (the fallback when the layer is
+                                                   missing; audit folders made before 2026-11-12 call
+                                                   this run out_prod.json / report_prod.xlsx)
     pages/page_<n>.png                             page images of every page the Excel uses + every
                                                    page Stage 2 called PRIMARY (--all-pages: all)
     summary.md                                     what the pipeline produced (facts, no judgement)
@@ -54,10 +57,11 @@ def _fmt(v):
     return "" if v is None else format(v, ",.0f").replace(",", ".") if abs(v) >= 1 else str(v)
 
 
-def _summary(meta, out_p, rep_p, out_w, rep_w):
+def _summary(meta, out_w, rep_w, out_n, rep_n):
     L = [f"# Audit run — file {meta.get('id')}: {meta.get('name')}", "",
          f"- reciTAL status: `{meta.get('status')}`, pages: {len(meta.get('pages') or [])}"]
-    for mode, out, rep in (("production (no words)", out_p, rep_p), ("words recovery ON", out_w, rep_w)):
+    for mode, out, rep in (("production — OCR words layer ON (out_words)", out_w, rep_w),
+                           ("fallback — no words layer (out_nowords)", out_n, rep_n)):
         dt, cons, pages = _excel_pages(out)
         L += ["", f"## Mode: {mode}", "",
               f"- document type `{dt}`, number format `{out.get('number_format')}`, "
@@ -93,9 +97,9 @@ def run(c, fid, prod, images, all_pages):
     meta = json.loads((d / "file.json").read_text(encoding="utf-8"))
     data = json.loads(raw_p.read_text(encoding="utf-8"))
     words = json.loads(words_p.read_text(encoding="utf-8"))
-    out_p, rep_p = S.process(data)
     out_w, rep_w = S.process(data, words=words)
-    for tag, out, rep in (("prod", out_p, rep_p), ("words", out_w, rep_w)):
+    out_n, rep_n = S.process(data)
+    for tag, out, rep in (("words", out_w, rep_w), ("nowords", out_n, rep_n)):
         (d / f"out_{tag}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
         ser = {k: (dict(v) if hasattr(v, "items") else v) for k, v in rep.items()}
         (d / f"out_{tag}_report.json").write_text(json.dumps(ser, ensure_ascii=False, indent=1, default=str),
@@ -106,7 +110,7 @@ def run(c, fid, prod, images, all_pages):
     if all_pages:
         pages = set(range(1, len(meta.get("pages") or []) + 1))
     else:
-        for out in (out_p, out_w):
+        for out in (out_w, out_n):
             for _sheet, (_n, pg) in _excel_pages(out)[2].items():
                 pages.update(pg)
             for pg, v in (out.get("page_classification") or {}).items():
@@ -118,7 +122,7 @@ def run(c, fid, prod, images, all_pages):
             if not any((d / "pages").glob(f"page_{pg}.*")):
                 R.page_image(c, fid, pg, d / "pages")
                 got += 1
-    (d / "summary.md").write_text(_summary(meta, out_p, rep_p, out_w, rep_w), encoding="utf-8")
+    (d / "summary.md").write_text(_summary(meta, out_w, rep_w, out_n, rep_n), encoding="utf-8")
     print(f"  {fid}: {meta.get('name')!r} -> {d}  (pages fetched now: {got}, total wanted: {len(pages)})")
 
 

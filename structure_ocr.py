@@ -76,9 +76,10 @@ try:
 except Exception:  # pragma: no cover
     _SIGN_PROOF_AVAILABLE = False
 
-# OPTIONAL add-on: recovery of lost cells / lines / labels from the reciTAL OCR words layer.
-# Production may not receive that layer: without `words` (or without this module) the pipeline
-# runs exactly as before. Deleting words_recovery.py removes the step entirely.
+# Add-on: recovery of lost cells / lines / labels from the reciTAL OCR words layer — ON by default
+# (user decision 2026-11-12; reciTAL confirmed the layer in production 2026-11-05). Nothing depends
+# on it: without `words` (layer missing, fetch failed) or without this module the pipeline runs as
+# the words-free fallback, exactly. Deleting words_recovery.py removes the step entirely.
 try:
     import words_recovery
     _WORDS_AVAILABLE = True
@@ -195,6 +196,11 @@ PANEL_MIN_SHARED_LINES = 2    # панели «бок о бок» обязаны
 PANEL_MIN_DISTINCT = 0.6      # доля РАЗНЫХ названий в колонке: «Comprado/Vendido» в каждой строке
                               # таблицы деривативов — колонка значений, а не панель (Raízen p64)
 PANEL_MIN_AMOUNTS = 3         # у КАЖДОЙ панели свои суммы между её названиями и следующей панелью
+NAME_PANEL_MARGIN = 0.01      # допуск только для НАЗВАНИЙ (отступ чуть левее края колонки названий).
+                              # Числа — без допуска: число стоит правее названий СВОЕЙ панели, а
+                              # короткие числа последней колонки левой панели кончаются вплотную к
+                              # названиям правой (Delfia p5: 58 / 371 / 933, центр в 0.008–0.010 от края —
+                              # с допуском они уходили в правую панель, DEL10, исправлено 2026-11-12)
 
 
 def build_panels(rows, tol):
@@ -219,7 +225,7 @@ def build_panels(rows, tol):
         member = defaultdict(list)
         labels = defaultdict(list)
         for x, y, lab in v:
-            k = _panel_index(x, edges)
+            k = _panel_index(x, edges, NAME_PANEL_MARGIN)
             member[k].append(y)
             labels[k].append(normalize(lab))
         shared_ok = all(
@@ -237,23 +243,26 @@ def build_panels(rows, tol):
     return panels
 
 
-def _panel_index(x, edges):
+def _panel_index(x, edges, margin=0.0):
+    """Последняя панель, левый край которой (минус `margin`) x достигает."""
     k = 0
     for i, e in enumerate(edges):
-        if x >= e - 0.01:
+        if x >= e - margin:
             k = i
     return k
 
 
 def panel_of(page, x, panels):
+    """Панель ЧИСЛА (x = центр его рамки): без допуска (DEL10, см. NAME_PANEL_MARGIN)."""
     edges = panels.get(page)
     return _panel_index(x, edges) if edges else 0
 
 
 def row_panel(r, panels):
-    """Панель строки: по левому краю названия; у безымянной — по x её сумм."""
+    """Панель строки: по левому краю названия (с допуском названий); у безымянной — по x её сумм."""
     if r.get("name_x_min") is not None:
-        return panel_of(r["page_nb"], r["name_x_min"], panels)
+        edges = panels.get(r["page_nb"])
+        return _panel_index(r["name_x_min"], edges, NAME_PANEL_MARGIN) if edges else 0
     if r.get("amounts"):
         return panel_of(r["page_nb"], statistics.median(xc(a["loc"]) for a in r["amounts"]), panels)
     return 0
@@ -1152,7 +1161,7 @@ def apply_header_zones(rows, groups, metadata, report):
     """Step 2c' (runs right after Step 2c): every figure of a zone column takes the zone's period (and,
     in Step 5, its perspective) whatever the provider tag. Provenance as in Step 2c: `period_src` = the
     provider's tag whenever the period differs from it (a Step-2c correction the zone undoes is
-    dropped). Returns the zone table for Step 5 and the optional words step."""
+    dropped). Returns the zone table for Step 5 and the words step."""
     panels = build_panels(rows, make_row_tol(rows))
     table = build_header_zones(rows, panels, groups, closing_date(metadata))
     for rec in table.values():
@@ -1752,7 +1761,7 @@ def assign_account_types(row, headers, report, zones=None):
             col["account_type_src"] = prior[i][0]
             report["account_type"]["zone_type_changed"] += 1
         if c.get("src") == "ocr_words":
-            # recovered from the OCR words layer (optional words_recovery step)
+            # recovered from the OCR words layer (words_recovery step, on by default)
             col["source"] = "ocr_words"
         out_columns.append(col)
     return out_columns
@@ -1974,7 +1983,7 @@ def process(data, keep_debug=False, words=None):
     report["number_format"] = number_format
     infer_unit_from_cents(metadata, rows)
     if words is not None:
-        # OPTIONAL step (production may have no words layer) — see words_recovery.py
+        # words layer (on by default; absent -> the words-free fallback) — see words_recovery.py
         if _WORDS_AVAILABLE:
             # the header-zone columns join the words grid: a column the header prints is a column
             # even when the extraction left it almost empty (Cibra p7 Consolidado 2024)
@@ -2068,31 +2077,71 @@ def print_report(report):
     print("=" * 60)
 
 
+def _input_base(input_path):
+    """`dir/<id>_raw.json` -> `dir/<id>`; `dir/<name>.json` -> `dir/<name>` (CLI defaults below)."""
+    folder, name = os.path.split(input_path)
+    stem = os.path.splitext(name)[0]
+    if stem.endswith("_raw"):
+        stem = stem[:-len("_raw")]
+    return os.path.join(folder, stem)
+
+
+def default_words_path(input_path):
+    """The words layer that goes with an input file (CLI default, words on by default since
+    2026-11-12): `<id>_raw.json` -> `<id>_words.json` (the pair `harness/recital_fetch.py export`
+    writes), `<name>.json` -> `<name>_words.json`. Returns (path or None if absent, expected path)."""
+    expected = _input_base(input_path) + "_words.json"
+    return (expected if os.path.isfile(expected) else None), expected
+
+
+def default_output_path(input_path):
+    """CLI default output, next to the input: `<id>_raw.json` -> `<id>_structured.json`, `<name>.json`
+    -> `<name>_structured.json`. Never a golden: the goldens (`structured_output*.json`) are written
+    only with an explicit -o — the old default `structured_output.json` silently overwrote the main
+    golden on any run without -o (fixed 2026-11-12)."""
+    return _input_base(input_path) + "_structured.json"
+
+
 def main():
     # Консоль Windows по умолчанию cp1252 — переключаем на UTF-8 для кириллицы.
     try:
         sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")   # argparse errors are in Russian too
     except Exception:
         pass
 
     ap = argparse.ArgumentParser(description="Структуризация OCR-JSON финансовой отчётности.")
     ap.add_argument("input", nargs="?", default="comprehansive_sample.json",
                     help="входной OCR-JSON")
-    ap.add_argument("-o", "--output", default="structured_output.json",
-                    help="выходной JSON")
+    ap.add_argument("-o", "--output", default=None,
+                    help="выходной JSON (по умолчанию <имя входа>_structured.json рядом со входом; "
+                         "эталоны structured_output*.json пишутся только явным -o)")
     ap.add_argument("--debug", action="store_true",
                     help="сохранять координаты (x/y) и метку сопоставления для сверки")
     ap.add_argument("--words", metavar="WORDS_JSON",
-                    help="ОПЦИОНАЛЬНО: слой OCR words reciTAL (GET /files/{id}/words/) — "
-                         "восстановление потерянных ячеек / строк / названий (words_recovery.py)")
+                    help="слой OCR words reciTAL (GET /files/{id}/words/) — восстановление потерянных "
+                         "ячеек / строк / названий (words_recovery.py). По умолчанию берётся сам: "
+                         "<имя>_words.json рядом со входом (<id>_raw.json -> <id>_words.json)")
+    ap.add_argument("--no-words", action="store_true",
+                    help="запасной режим без слоя words (как если бы reciTAL его не отдал)")
     args = ap.parse_args()
+    if args.words and args.no_words:
+        ap.error("--words и --no-words несовместимы")
+    if args.output is None:
+        args.output = default_output_path(args.input)
 
     with open(args.input, encoding="utf-8") as f:
         data = json.load(f)
     words = None
-    if args.words:
-        with open(args.words, encoding="utf-8") as f:
+    words_path, expected = (args.words, args.words) if args.words else default_words_path(args.input)
+    if words_path and not args.no_words:
+        with open(words_path, encoding="utf-8") as f:
             words = json.load(f)
+        n_pages = len(words) if isinstance(words, list) else "?"
+        print(f"Слой OCR words: {words_path} ({n_pages} стр.)")
+    else:
+        why = "--no-words" if args.no_words else f"нет файла {expected}"
+        print(f"Слой OCR words: не используется ({why}) -> запасной режим без words")
 
     output, report = process(data, keep_debug=args.debug, words=words)
 

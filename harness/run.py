@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """Regression harness CLI (corpus = reciTAL agent 5485 exports in _recital/, see ground_truth.yaml).
 
-    python3.13 -E -P harness/run.py snapshot <tag> [--words] [ids...]
+    python3.13 -E -P harness/run.py snapshot <tag> [--no-words] [ids...]
                                                               run the pipeline on the corpus, save + score
-                                                              (--words: optional OCR-words recovery ON;
-                                                              default = production mode, no words layer)
+                                                              (default = production mode, OCR words layer ON
+                                                              since 2026-11-12; --no-words = the words-free
+                                                              fallback; --words is accepted, = the default)
     python3.13 -E -P harness/run.py score <tag>               scoreboard of a saved snapshot
     python3.13 -E -P harness/run.py diff <tagA> <tagB> [-v]   cell-level + Excel-level differences
     python3.13 -E -P harness/run.py goldens                   8 local structured_output*.json in sync?
@@ -34,7 +35,7 @@ SHORT = {"cols": "cols", "conservation_diff": "cons", "offline": "offln", "null_
 def snapshot(tag, ids, use_words=False):
     d = SNAP / tag
     d.mkdir(parents=True, exist_ok=True)
-    print(f"mode: {'OCR words recovery ON' if use_words else 'production (no words layer)'}")
+    print(f"mode: {'production (OCR words layer ON)' if use_words else 'fallback (no words layer)'}")
     for fid in ids:
         res = H.evaluate(fid, use_words)
         (d / f"{fid}.json").write_text(json.dumps(res, ensure_ascii=False, indent=0), encoding="utf-8")
@@ -168,8 +169,9 @@ def selftest():
     cond = min(c3.values()) > 0
     print(f"  {'PASS' if cond else 'FAIL'}  DFP Controladora-only -> company figures exported  {c3}")
     ok &= cond
-    # The OCR-words step is OPTIONAL (production may have no words layer): without words, with an
-    # empty layer, or with the module switched off, the output must be the words-free one exactly.
+    # The OCR-words step is on by default but pluggable (the layer can be missing: fetch failed, already
+    # deleted): without words, with an empty layer, or with the module switched off, the output must be
+    # the words-free one exactly.
     data, words, meta = H.load("3029574")
     dump = lambda o: json.dumps(o, ensure_ascii=False, sort_keys=True)
     base = dump(H.S.process(data, keep_debug=True)[0])
@@ -193,8 +195,8 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     cmd = sys.argv[1]
     if cmd == "snapshot":
-        args = [a for a in sys.argv[3:] if a != "--words"]
-        snapshot(sys.argv[2], args or H.file_ids(), "--words" in sys.argv[3:])
+        args = [a for a in sys.argv[3:] if a not in ("--words", "--no-words")]
+        snapshot(sys.argv[2], args or H.file_ids(), "--no-words" not in sys.argv[3:])
     elif cmd == "score":
         score(sys.argv[2])
     elif cmd == "diff":

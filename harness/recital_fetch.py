@@ -10,7 +10,8 @@ usage (run from the project dir, isolated: python3.13 -E -P ...):
     recital_fetch.py export <file_id> [prod]       fetch into _inbox/<file_id>/ + the two files the
                                                    Streamlit app takes:
                                                    _inbox/<file_id>/<file_id>_raw.json   (main upload)
-                                                   _inbox/<file_id>/<file_id>_words.json (optional)
+                                                   _inbox/<file_id>/<file_id>_words.json (words layer,
+                                                   used by default since 2026-11-12)
                                                    (_recital/ stays the harness corpus: 22 files)
     recital_fetch.py image  <file_id> <page> [prod] page image -> _recital/<file_id>/page_<n>.<ext>
 
@@ -64,7 +65,7 @@ def fetch(c, fid, prod=False, quiet=False, root=OUT_ROOT):
 
 def export(d):
     """The two uploads of the Streamlit app, from a fetched dir: the raw OCR JSON = values + groups
-    (a LIST, the shape structure_ocr reads) and the words layer (the optional second upload)."""
+    (a LIST, the shape structure_ocr reads) and the words layer (the second upload, used by default)."""
     fid = d.name
     values = json.loads((d / "values.json").read_text(encoding="utf-8"))
     groups = json.loads((d / "groups.json").read_text(encoding="utf-8"))
@@ -135,7 +136,7 @@ def main():
     elif cmd == "export":
         d = fetch(c, int(sys.argv[2]), len(sys.argv) > 3 and sys.argv[3] == "prod", root=INBOX_ROOT)
         raw, words = export(d)
-        print(f"Streamlit uploads:\n  raw OCR JSON (main)    : {raw}\n  OCR words (optional)   : {words}")
+        print(f"Streamlit uploads:\n  raw OCR JSON (main)    : {raw}\n  OCR words (default)    : {words}")
     elif cmd == "image":
         fid, page = int(sys.argv[2]), int(sys.argv[3])
         p, ctype, n = page_image(c, fid, page, OUT_ROOT / str(fid))

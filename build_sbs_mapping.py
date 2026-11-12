@@ -457,6 +457,10 @@ AMBIGUITY_GROUPS = [
             "emprestimos socios",
                         "mutuos socios",
             "titulos emitidos",
+            # ALUBAR p6 (audit 2026-11-04, fixed 2026-11-12): the caption of BOTH the current and the
+            # non-current loans line; an ST alias only (labels_OLD.yaml), so without it here the
+            # non-current line was taken as short-term (ST = ST + LT, LT empty)
+            "emprestimos financiamentos e debentures",
         ],
     },
     {
